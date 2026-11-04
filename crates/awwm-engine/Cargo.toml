@@ -1,0 +1,28 @@
+[package]
+name = "awwm-engine"
+description = "Win32 window-management engine of AWWM: pinning, transparency, gestures, snapping overlays and rules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+awwm-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+png.workspace = true
+base64.workspace = true
+windows.workspace = true
+
+[[bin]]
+name = "awwm-testapp"
+path = "src/bin/awwm-testapp.rs"
+test = false
+doc = false
+
+[lints]
+workspace = true

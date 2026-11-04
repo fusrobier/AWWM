@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AWWM",
+  "mainBinaryName": "awwm",
+  "version": "1.0.0",
+  "identifier": "dev.awwm.windowmanager",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "publisher": "AWWM contributors",
+    "copyright": "Copyright (c) 2026 AWWM contributors. MIT License.",
+    "category": "Utility",
+    "shortDescription": "Advanced window manager for Windows",
+    "longDescription": "AWWM keeps windows always on top, adjusts their transparency, applies automatic rules and lets you move, resize and snap any window with Alt + mouse gestures.",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../docs/USER_GUIDE.md": "docs/USER_GUIDE.md",
+      "../docs/WINDOWS_LIMITATIONS.md": "docs/WINDOWS_LIMITATIONS.md",
+      "../docs/ARCHITECTURE.md": "docs/ARCHITECTURE.md",
+      "../README.md": "docs/README.md",
+      "../LICENSE": "docs/LICENSE.txt"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "installerHooks": "./installer-hooks.nsh"
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    }
+  }
+}

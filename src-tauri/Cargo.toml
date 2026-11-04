@@ -1,0 +1,36 @@
+[package]
+name = "awwm"
+description = "AWWM - Advanced Window Manager for Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+default-run = "awwm"
+
+[lib]
+name = "awwm_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "awwm"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+awwm-core.workspace = true
+awwm-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+windows.workspace = true
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi", "std", "registry", "smallvec", "tracing-log"] }
+tracing-appender = "0.2"
+
+[lints]
+workspace = true

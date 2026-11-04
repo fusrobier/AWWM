@@ -1,0 +1,26 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The settings window may only call AWWM's own commands and listen to its events. No file-system, shell, HTTP or opener permissions are granted.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-snapshot",
+    "allow-list-windows",
+    "allow-pin-window",
+    "allow-unpin-window",
+    "allow-set-window-opacity",
+    "allow-unpin-all",
+    "allow-activate-window",
+    "allow-set-management-enabled",
+    "allow-save-settings",
+    "allow-reset-settings",
+    "allow-apply-rules-now",
+    "allow-get-window-icon",
+    "allow-get-app-info",
+    "allow-get-key-names",
+    "allow-open-location",
+    "allow-open-documentation"
+  ]
+}

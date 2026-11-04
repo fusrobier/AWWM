@@ -1,0 +1,3 @@
+# Tests may use unwrap()/expect(): a panic is the desired failure mode there.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

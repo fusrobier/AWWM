@@ -1,0 +1,169 @@
+/* Design tokens. Values follow the Windows 11 (Fluent) palette, with a blue accent.
+   The theme is chosen with data-theme on <html> (set before first render in main.tsx). */
+
+:root {
+  --font-text: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+
+  --radius-control: 4px;
+  --radius-card: 8px;
+  --radius-pill: 999px;
+
+  --sidebar-width: 236px;
+  --page-padding-inline: 32px;
+
+  --duration-fast: 0.1s;
+  --duration-normal: 0.167s;
+  --ease-out: cubic-bezier(0, 0, 0, 1);
+
+  --brand: #2563eb;
+}
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-app: #f0f2f5;
+  --bg-layer: #f9fafb;
+  --border-layer: #e4e6ea;
+  --bg-card: #ffffff;
+  --bg-card-secondary: #f7f8fa;
+  --bg-flyout: #fcfcfc;
+  --bg-dialog: #ffffff;
+  --bg-dialog-footer: #f3f4f6;
+  --border-card: #e3e5e8;
+  --border-divider: #eceef1;
+
+  --text-primary: #1a1a1a;
+  --text-secondary: #5d5d5d;
+  --text-tertiary: #858585;
+  --text-disabled: #a3a3a3;
+
+  --control-fill: #ffffff;
+  --control-fill-hover: #f8f9fa;
+  --control-fill-pressed: #f3f4f6;
+  --control-fill-disabled: #f5f5f5;
+  --control-fill-input-focus: #ffffff;
+  --control-border: #e1e3e6;
+  --control-border-bottom: #c7c9cc;
+  --control-strong-border: #6f6f6f;
+  --control-strong-fill: #6f6f6f;
+  --input-border-bottom: #8a8a8a;
+
+  --subtle-fill-hover: rgb(0 0 0 / 0.04);
+  --subtle-fill-pressed: rgb(0 0 0 / 0.025);
+  --subtle-fill-selected: rgb(0 0 0 / 0.055);
+
+  --accent: #2563eb;
+  --accent-hover: #1d55d4;
+  --accent-pressed: #1e46b0;
+  --accent-disabled: #a9bde8;
+  --on-accent: #ffffff;
+  --accent-text: #1d4ed8;
+  --accent-subtle: #e8effd;
+  --accent-subtle-text: #1e40af;
+
+  --success: #0f7b0f;
+  --success-subtle: #dff6dd;
+  --warning: #9d5d00;
+  --warning-subtle: #fff4ce;
+  --danger: #c42b1c;
+  --danger-subtle: #fde7e9;
+  --danger-fill: #c42b1c;
+  --danger-fill-hover: #b12718;
+  --on-danger: #ffffff;
+  --neutral-subtle: #eef0f2;
+
+  --slider-track: #8f8f8f;
+  --slider-thumb-outer: #ffffff;
+
+  --focus-ring: #1a1a1a;
+  --focus-ring-inner: #ffffff;
+
+  --kbd-bg: #f5f6f8;
+  --kbd-border: #d5d8dc;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-flyout: 0 8px 16px rgb(0 0 0 / 0.14), 0 0 2px rgb(0 0 0 / 0.08);
+  --shadow-dialog: 0 32px 64px rgb(0 0 0 / 0.19), 0 2px 21px rgb(0 0 0 / 0.15);
+  --backdrop: rgb(0 0 0 / 0.3);
+  --scroll-thumb: rgb(0 0 0 / 0.32);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-app: #1c1c1c;
+  --bg-layer: #232323;
+  --border-layer: #191919;
+  --bg-card: #2b2b2b;
+  --bg-card-secondary: #272727;
+  --bg-flyout: #2c2c2c;
+  --bg-dialog: #2b2b2b;
+  --bg-dialog-footer: #202020;
+  --border-card: #1a1a1a;
+  --border-divider: #222222;
+
+  --text-primary: #ffffff;
+  --text-secondary: #cfcfcf;
+  --text-tertiary: #9e9e9e;
+  --text-disabled: #737373;
+
+  --control-fill: rgb(255 255 255 / 0.061);
+  --control-fill-hover: rgb(255 255 255 / 0.084);
+  --control-fill-pressed: rgb(255 255 255 / 0.033);
+  --control-fill-disabled: rgb(255 255 255 / 0.042);
+  --control-fill-input-focus: #1f1f1f;
+  --control-border: rgb(255 255 255 / 0.07);
+  --control-border-bottom: rgb(255 255 255 / 0.05);
+  --control-strong-border: #a0a0a0;
+  --control-strong-fill: #cfcfcf;
+  --input-border-bottom: #9a9a9a;
+
+  --subtle-fill-hover: rgb(255 255 255 / 0.06);
+  --subtle-fill-pressed: rgb(255 255 255 / 0.04);
+  --subtle-fill-selected: rgb(255 255 255 / 0.07);
+
+  --accent: #60a5fa;
+  --accent-hover: #75b1fb;
+  --accent-pressed: #4f94e8;
+  --accent-disabled: #3a4a60;
+  --on-accent: #0a1628;
+  --accent-text: #8ab8fb;
+  --accent-subtle: rgb(96 165 250 / 0.16);
+  --accent-subtle-text: #b3d1fd;
+
+  --success: #6ccb5f;
+  --success-subtle: #393d1b;
+  --warning: #fce100;
+  --warning-subtle: #433519;
+  --danger: #ff99a4;
+  --danger-subtle: #442726;
+  --danger-fill: #d13438;
+  --danger-fill-hover: #c02b30;
+  --on-danger: #ffffff;
+  --neutral-subtle: rgb(255 255 255 / 0.08);
+
+  --slider-track: #9a9a9a;
+  --slider-thumb-outer: #454545;
+
+  --focus-ring: #ffffff;
+  --focus-ring-inner: #000000;
+
+  --kbd-bg: rgb(255 255 255 / 0.06);
+  --kbd-border: rgb(255 255 255 / 0.16);
+
+  --shadow-card: none;
+  --shadow-flyout: 0 8px 16px rgb(0 0 0 / 0.26), 0 0 2px rgb(0 0 0 / 0.3);
+  --shadow-dialog: 0 32px 64px rgb(0 0 0 / 0.37), 0 2px 21px rgb(0 0 0 / 0.37);
+  --backdrop: rgb(0 0 0 / 0.5);
+  --scroll-thumb: rgb(255 255 255 / 0.32);
+}
+
+@media (max-width: 900px) {
+  :root {
+    --sidebar-width: 204px;
+    --page-padding-inline: 24px;
+  }
+}
