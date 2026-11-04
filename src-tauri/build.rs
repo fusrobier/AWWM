@@ -18,6 +18,8 @@ const COMMANDS: &[&str] = &[
     "get_key_names",
     "open_location",
     "open_documentation",
+    "export_settings",
+    "import_settings",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

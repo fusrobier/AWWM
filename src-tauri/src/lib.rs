@@ -2,6 +2,7 @@
 //! the system tray, persistence and Windows integration.
 
 mod autostart;
+mod backup;
 mod commands;
 mod logging;
 mod paths;
@@ -194,6 +195,8 @@ pub fn run() {
             commands::get_key_names,
             commands::open_location,
             commands::open_documentation,
+            commands::export_settings,
+            commands::import_settings,
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { .. } = event {

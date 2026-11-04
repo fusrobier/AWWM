@@ -272,6 +272,43 @@ export function AppStateProvider({ children, onNavigate }: AppStateProviderProps
     }
   }, [notify, notifyError, queue, setDraft, setSnapshot]);
 
+  const exportSettings = useCallback(async (): Promise<boolean> => {
+    try {
+      // Export what the user sees: save pending edits first.
+      await flushSettings();
+      const path = await api.exportSettings();
+      if (path === null) return false;
+      notify('success', `Settings and rules were exported to ${path}.`);
+      return true;
+    } catch (error) {
+      notifyError(error, 'Settings were not exported');
+      return false;
+    }
+  }, [flushSettings, notify, notifyError]);
+
+  const importSettings = useCallback(async (): Promise<boolean> => {
+    queue.cancelScheduled();
+    await queue.whenIdle();
+    try {
+      const next = await api.importSettings();
+      if (next === null) {
+        const pending = draftRef.current;
+        if (pending) queue.schedule(pending);
+        return false;
+      }
+      setDraft(null);
+      setSnapshot(mergeSnapshot(snapshotRef.current, next));
+      setSaveError(null);
+      notify('success', `Settings imported: ${next.settings.rules.length} automatic rule(s).`);
+      return true;
+    } catch (error) {
+      notifyError(error, 'Settings were not imported');
+      const pending = draftRef.current;
+      if (pending) queue.schedule(pending);
+      return false;
+    }
+  }, [notify, notifyError, queue, setDraft, setSnapshot]);
+
   const dismissWarning = useCallback(() => {
     setDismissedWarning(snapshotRef.current?.settingsWarning ?? null);
   }, []);
@@ -291,6 +328,8 @@ export function AppStateProvider({ children, onNavigate }: AppStateProviderProps
       updateManaged,
       setManagementEnabled,
       resetSettings,
+      exportSettings,
+      importSettings,
       dismissedWarning,
       dismissWarning,
     };
@@ -305,6 +344,8 @@ export function AppStateProvider({ children, onNavigate }: AppStateProviderProps
     updateManaged,
     setManagementEnabled,
     resetSettings,
+    exportSettings,
+    importSettings,
     dismissedWarning,
     dismissWarning,
   ]);

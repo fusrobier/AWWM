@@ -376,6 +376,18 @@ activation key, AWWM picks a different snap key automatically.
 | **Theme** | Use system setting | Use system setting, Light, Dark |
 | **Log level** | Information (default) | Errors only, Warnings and errors, Information (default), Debug, Trace (very detailed) |
 
+### Backup
+
+Every change is saved to `settings.json` immediately, so settings and rules survive a
+restart or a forced end of the task. To move them to another PC or keep a copy:
+
+- **Export…** saves all settings, keyboard shortcuts and automatic rules to a `.json` file
+  you choose (suggested name `AWWM-settings.json`).
+- **Import…** loads such a file and replaces the current settings and rules. The file is
+  checked first: files that are not AWWM exports, are damaged or larger than 1 MB are
+  rejected and nothing changes. Out-of-range values are corrected. The **Window management**
+  switch keeps its current state.
+
 ### Maintenance
 
 - **Open settings folder** opens `%APPDATA%\dev.awwm.windowmanager`, which contains `settings.json` and its

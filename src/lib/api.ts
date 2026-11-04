@@ -27,6 +27,10 @@ export const api = {
   /** Validates, persists and applies settings. Resolves with the sanitized result. */
   saveSettings: (settings: Settings) => invoke<AppSnapshot>('save_settings', { settings }),
   resetSettings: () => invoke<AppSnapshot>('reset_settings'),
+  /** Saves all settings (incl. rules) to a file chosen in a Save dialog; null when cancelled. */
+  exportSettings: () => invoke<string | null>('export_settings'),
+  /** Loads settings from a file chosen in an Open dialog and applies them; null when cancelled. */
+  importSettings: () => invoke<AppSnapshot | null>('import_settings'),
   /** Applies enabled rules to all current windows; resolves with the number of windows changed. */
   applyRulesNow: () => invoke<number>('apply_rules_now'),
   /** PNG data URL of the executable's icon, or null when unavailable. */

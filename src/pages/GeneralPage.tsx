@@ -41,9 +41,21 @@ export function GeneralPage() {
     saveStatus,
     saveError,
     resetSettings,
+    exportSettings,
+    importSettings,
     dismissedWarning,
     dismissWarning,
   } = useAppState();
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null);
+  const runBackup = async (kind: 'export' | 'import'): Promise<void> => {
+    if (backupBusy) return;
+    setBackupBusy(kind);
+    try {
+      await (kind === 'export' ? exportSettings() : importSettings());
+    } finally {
+      setBackupBusy(null);
+    }
+  };
   const { run, isBusy } = useCommandRunner();
   const [confirmReset, setConfirmReset] = useState(false);
   const general = settings.general;
@@ -191,6 +203,25 @@ export function GeneralPage() {
           options={LOG_LEVELS.map((level) => ({ value: level, label: LOG_LEVEL_LABELS[level] }))}
           onChange={(logLevel) => setGeneral({ logLevel })}
         />
+      </Card>
+
+      <Card title="Backup" icon="document">
+        <SettingRow
+          label="Export settings"
+          description="Saves all settings, keyboard shortcuts and automatic rules to a file of your choice."
+        >
+          <Button icon="document" busy={backupBusy === 'export'} onClick={() => void runBackup('export')}>
+            Export…
+          </Button>
+        </SettingRow>
+        <SettingRow
+          label="Import settings"
+          description="Replaces the current settings and rules with those from an exported file. Window management stays on or off as it is now."
+        >
+          <Button icon="folder" busy={backupBusy === 'import'} onClick={() => void runBackup('import')}>
+            Import…
+          </Button>
+        </SettingRow>
       </Card>
 
       <Card title="Maintenance" icon="folder">

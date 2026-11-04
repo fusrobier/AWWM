@@ -27,6 +27,8 @@ AWWM is an independent project. It is not affiliated with or endorsed by Microso
 - **System tray.** Open the settings, pause window management, view pinned windows, unpin
   all windows, or exit.
 - **Start with Windows.** Per-user startup entry; no administrator rights needed.
+- **Export and import.** Save all settings and automatic rules to a file and load them
+  again (General → Backup), e.g. to move them to another PC.
 - **Crash recovery.** AWWM records which windows it changed. After a crash or forced
   shutdown, the next start adopts those windows again or restores their original state,
   so no window stays stuck on top or transparent.
@@ -185,7 +187,7 @@ Release verification run of 2026-11-04 on Windows 11 Pro (10.0.26200), three mon
 
 | Check | Result |
 |-------|--------|
-| `cargo test --workspace -- --test-threads=1` | **229 passed**, 0 failed: awwm-core 97, awwm-engine 43 unit + 80 integration (real windows created by `awwm-testapp`), app shell 9 |
+| `cargo test --workspace -- --test-threads=1` | **233 passed**, 0 failed: awwm-core 97, awwm-engine 43 unit + 80 integration (real windows created by `awwm-testapp`), app shell 13 |
 | `npm test` (vitest) | **80 passed** (9 files) |
 | `npm run typecheck` | no errors |
 | `cargo clippy --workspace --all-targets -- -D warnings` | no warnings |

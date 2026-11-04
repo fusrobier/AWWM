@@ -116,6 +116,67 @@ pub async fn reset_settings(app: AppHandle) -> CmdResult<AppSnapshot> {
     .await
 }
 
+/// Shows the native file dialog on the UI thread (modal to the settings window) and
+/// returns the chosen path, or `None` when cancelled.
+async fn pick_file(app: AppHandle, kind: crate::backup::DialogKind) -> CmdResult<Option<PathBuf>> {
+    blocking(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let owner = app
+            .get_webview_window(crate::ui_window::MAIN)
+            .and_then(|w| w.hwnd().ok());
+        // HWND is not Send; pass the raw value to the UI thread.
+        let owner_raw = owner.map(|h| h.0 as isize);
+        app.run_on_main_thread(move || {
+            let owner = owner_raw
+                .map(|raw| windows::Win32::Foundation::HWND(raw as *mut core::ffi::c_void));
+            let _ = tx.send(crate::backup::pick_file(kind, owner));
+        })
+        .map_err(|e| CommandError::engine(format!("Could not show the file dialog: {e}")))?;
+        rx.recv()
+            .map_err(|_| CommandError::engine("The file dialog was closed unexpectedly."))?
+            .map_err(CommandError::io)
+    })
+    .await
+}
+
+/// Exports all settings (including automatic rules) to a file the user chooses.
+/// Resolves with the written path, or `null` when the dialog was cancelled.
+#[tauri::command]
+pub async fn export_settings(app: AppHandle) -> CmdResult<Option<String>> {
+    let Some(path) = pick_file(app.clone(), crate::backup::DialogKind::Export).await? else {
+        return Ok(None);
+    };
+    blocking(move || {
+        let settings = lock(&app.state::<AppState>().settings).clone();
+        crate::backup::write_export(&path, &settings).map_err(CommandError::io)?;
+        tracing::info!(path = %path.display(), "settings exported");
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+}
+
+/// Imports settings from a file the user chooses and applies them (the window-management
+/// switch keeps its current state). Resolves with the new snapshot, or `null` when the
+/// dialog was cancelled.
+#[tauri::command]
+pub async fn import_settings(app: AppHandle) -> CmdResult<Option<AppSnapshot>> {
+    let Some(path) = pick_file(app.clone(), crate::backup::DialogKind::Import).await? else {
+        return Ok(None);
+    };
+    blocking(move || {
+        let imported = crate::backup::read_import(&path).map_err(CommandError::invalid)?;
+        let state = app.state::<AppState>();
+        let snapshot = state.update_settings(&app, move |current| {
+            let enabled = current.general.management_enabled;
+            *current = imported;
+            current.general.management_enabled = enabled;
+        })?;
+        tracing::info!(path = %path.display(), rules = snapshot.settings.rules.len(), "settings imported");
+        Ok(Some(snapshot))
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn apply_rules_now(state: State<'_, AppState>) -> CmdResult<u32> {
     let handle = engine(&state);

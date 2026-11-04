@@ -21,6 +21,8 @@
     "allow-get-app-info",
     "allow-get-key-names",
     "allow-open-location",
-    "allow-open-documentation"
+    "allow-open-documentation",
+    "allow-export-settings",
+    "allow-import-settings"
   ]
 }

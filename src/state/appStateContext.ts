@@ -20,6 +20,10 @@ export interface AppState {
   updateManaged: (update: (managed: ManagedWindow[]) => ManagedWindow[]) => void;
   setManagementEnabled: (enabled: boolean) => Promise<boolean>;
   resetSettings: () => Promise<boolean>;
+  /** Saves pending edits, then exports all settings to a file the user chooses. */
+  exportSettings: () => Promise<boolean>;
+  /** Imports settings from a file the user chooses and replaces the current ones. */
+  importSettings: () => Promise<boolean>;
   /** The settings warning the user dismissed (so a new warning shows again). */
   dismissedWarning: string | null;
   dismissWarning: () => void;
