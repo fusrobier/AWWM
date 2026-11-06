@@ -1,6 +1,8 @@
 //! The settings window. It is created on demand and destroyed when closed, so AWWM's
 //! background footprint does not include a WebView.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::window::Color;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
@@ -52,8 +54,10 @@ fn background(app: &AppHandle) -> Color {
 /// Must be called on the main thread or from a context that may create windows.
 pub fn show(app: &AppHandle, page: Option<&'static str>) {
     if let Some(window) = app.get_webview_window(MAIN) {
-        let _ = window.unminimize();
+        // Show before restoring: restoring a hidden (minimized-to-tray) window first would
+        // briefly show it, hide it again and then show it (a flash).
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
         if let Some(page) = page {
             let _ = app.emit_to(MAIN, event::NAVIGATE, page);
@@ -81,7 +85,41 @@ pub fn show(app: &AppHandle, page: Option<&'static str>) {
         Ok(window) => {
             let _ = window.set_focus();
         }
-        Err(e) => tracing::error!(error = %e, "could not create the settings window"),
+        Err(e) => {
+            tracing::error!(error = %e, "could not create the settings window");
+            explain_missing_webview(&e.to_string());
+        }
+    }
+}
+
+/// Tells the user once per run why the settings window cannot open. The usual cause is a
+/// missing or damaged WebView2 Runtime (for example the portable `awwm.exe` on a PC without
+/// it); everything else keeps working in the background, so a log entry alone would leave
+/// the user with a tray icon that seems to do nothing.
+fn explain_missing_webview(error: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+    static SHOWN: AtomicBool = AtomicBool::new(false);
+    if SHOWN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let text = windows::core::HSTRING::from(format!(
+        "AWWM could not open its settings window.\n\n\
+         This usually means that the Microsoft Edge WebView2 Runtime is missing or damaged. \
+         Run the AWWM installer again, or install the runtime from \
+         https://developer.microsoft.com/microsoft-edge/webview2/\n\n\
+         Pinned windows, rules, mouse gestures and shortcuts keep working.\n\n\
+         Details: {error}"
+    ));
+    // SAFETY: modal message box without an owner; both strings outlive the call.
+    unsafe {
+        MessageBoxW(
+            None,
+            &text,
+            w!("AWWM"),
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+        );
     }
 }
 

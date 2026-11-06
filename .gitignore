@@ -1,6 +1,8 @@
 /target/
 /node_modules/
 /dist/
+# Staged release artifacts written by scripts/verify-release.ps1
+/release/
 src-tauri/target/
 src-tauri/gen/schemas/
 *.log

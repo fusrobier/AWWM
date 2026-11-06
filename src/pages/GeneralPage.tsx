@@ -117,6 +117,12 @@ export function GeneralPage() {
           onChange={(runInBackground) => setGeneral({ runInBackground })}
         />
         <SwitchSetting
+          label="Minimize to the tray"
+          description="Minimizing this window hides it in the notification area instead of the taskbar. AWWM keeps running."
+          checked={general.minimizeToTray}
+          onChange={(minimizeToTray) => setGeneral({ minimizeToTray })}
+        />
+        <SwitchSetting
           label="Restore windows when exiting"
           description="Release all managed windows (always-on-top and opacity) when AWWM exits."
           checked={general.restoreOnExit}

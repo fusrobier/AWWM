@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AWWM - WiX fragment: let a running AWWM exit gracefully before an upgrade or uninstall.
+
+  Wired up in src-tauri/tauri.conf.json -> bundle.windows.wix:
+    fragmentPaths      ["./wix/awwm-graceful-exit.wxs"]   (compiled with Tauri's main.wxs)
+    componentGroupRefs ["AWWMGracefulExit"]               (WiX only links a fragment when
+                                                            something in it is referenced; the
+                                                            empty component group is that anchor)
+
+  Behaviour: before InstallValidate - which runs the Restart Manager "files in use" check -
+  the MSI runs the installed awwm.exe with its exit flag (see ExeCommand below; the flag cannot
+  be spelled out here because XML comments must not contain two hyphens). That build finds the
+  running instance's engine window, posts AWWM.ExitRequested (AWWM restores pinned / transparent
+  windows), waits up to 20 s for the process to end and exits with 0 (no instance left) or 1.
+  It never starts AWWM and shows no UI; awwm.exe is a GUI-subsystem program, so no console
+  window appears either.
+
+  * Immediate and impersonated: runs as the installing user, in the user's session, where
+    AWWM's message-only window lives.
+  * Return="ignore": a missing executable, an older build that does not know the flag or an
+    instance that keeps running never blocks the installation; the Restart Manager check in
+    InstallValidate then handles AWWM as before.
+  * Condition: only when this product is already installed (uninstall, repair) or the
+    MajorUpgrade element of Tauri's main.wxs found an older/newer AWWM (WIX_UPGRADE_DETECTED,
+    set by FindRelatedProducts), and only when INSTALLDIR lies inside Program Files (see the
+    comment at the sequence entry). Never on a fresh install. Elsewhere, Restart Manager
+    closes AWWM as before and the next start recovers its windows.
+  * INSTALLDIR is Tauri's install-folder property. It is resolved by CostFinalize; during an
+    upgrade AppSearch restores it from HKCU\Software\<Manufacturer>\<Product>\InstallDir, so it
+    points at the previous installation (RemoveExistingProducts runs after InstallInitialize,
+    i.e. the old files are still there).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <ComponentGroup Id="AWWMGracefulExit" />
+
+    <CustomAction Id="AWWMRequestGracefulExit"
+                  Directory="INSTALLDIR"
+                  ExeCommand="&quot;[INSTALLDIR]awwm.exe&quot; --exit"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- Sequenced right before InstallValidate (1400), i.e. after CostFinalize (1000). -->
+      <!-- Only when INSTALLDIR is inside Program Files: INSTALLDIR can be restored from a
+           user-writable HKCU value, and this action runs with the installer's token (full
+           administrator or LocalSystem for elevated or managed installs). A binary outside
+           Program Files could have been placed or replaced by a standard user. -->
+      <Custom Action="AWWMRequestGracefulExit" Before="InstallValidate"><![CDATA[(Installed OR WIX_UPGRADE_DETECTED) AND (INSTALLDIR ~<< ProgramFiles64Folder)]]></Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

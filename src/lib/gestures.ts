@@ -1,6 +1,6 @@
 // Mouse-gesture vocabulary and the live "cheat sheet" derived from the settings.
-import type { GestureSettings, Modifier, MouseButton, SnapSettings } from './types';
-import { pluralize } from './format';
+import type { AlignmentSettings, GestureSettings, Modifier, MouseButton, SnapSettings } from './types';
+import { formatPixels, pluralize } from './format';
 
 /** Same order as the backend's `Modifier::ALL`. */
 export const MODIFIERS: readonly Modifier[] = ['alt', 'ctrl', 'shift', 'win'];
@@ -52,9 +52,27 @@ export interface CheatSheet {
   notes: string[];
 }
 
+/** Notes about pixel orientation and the visible pixel grid, for the gestures that exist. */
+function alignmentNotes(gestures: GestureSettings, snapping: SnapSettings, alignment: AlignmentSettings): string[] {
+  const notes: string[] = [];
+  if (alignment.pixelOrientation && gestures.moveButton) {
+    notes.push('While moving, the position is shown in pixels.');
+  }
+  if (alignment.showGrid && (gestures.moveButton || gestures.resizeButton)) {
+    const gesture =
+      gestures.moveButton && gestures.resizeButton ? 'move or resize' : gestures.moveButton ? 'move' : 'resize';
+    notes.push(`A pixel grid (${formatPixels(alignment.gridSize)}) appears while you ${gesture}.`);
+    if (snapping.enabled && alignment.snapToGrid) {
+      notes.push(`Holding ${MODIFIER_LABELS[snapping.modifier]} also snaps to the grid lines.`);
+    }
+  }
+  return notes;
+}
+
 export function buildCheatSheet(
   gestures: GestureSettings,
   snapping: SnapSettings,
+  alignment: AlignmentSettings,
   managementEnabled: boolean,
 ): CheatSheet {
   if (!gestures.enabled) {
@@ -88,6 +106,7 @@ export function buildCheatSheet(
     if (snapping.enabled) {
       notes.push(`Press or release ${snapModifier} during a drag to switch snapping on or off.`);
     }
+    notes.push(...alignmentNotes(gestures, snapping, alignment));
   }
 
   if (gestures.scope === 'pinnedOnly') notes.push('Only pinned windows can be moved or resized.');

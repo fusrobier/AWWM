@@ -11,7 +11,7 @@ import type {
 import { resolveSnapModifier } from './gestures';
 import { normalizeExePattern } from './rules';
 
-export type SettingsSection = 'general' | 'pinning' | 'gestures' | 'snapping' | 'hotkeys';
+export type SettingsSection = 'general' | 'pinning' | 'gestures' | 'snapping' | 'alignment' | 'hotkeys';
 
 /** Shallow-merges `patch` into one settings section. */
 export function patchSection<K extends SettingsSection>(

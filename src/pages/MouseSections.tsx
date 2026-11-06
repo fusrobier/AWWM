@@ -1,26 +1,30 @@
 import { Fragment, useId, useRef, useState } from 'react';
 import { Button, IconButton } from '../components/Button';
-import { Card } from '../components/Card';
+import { Card, NumberSetting, SwitchSetting } from '../components/Card';
+import { GridPreview } from '../components/GridPreview';
 import { Icon } from '../components/Icon';
 import { TextInput } from '../components/TextInput';
 import { WindowPicker } from '../components/WindowPicker';
 import { cx } from '../lib/format';
-import { buildCheatSheet } from '../lib/gestures';
+import { buildCheatSheet, MODIFIER_LABELS } from '../lib/gestures';
+import { GRID_SIZE_MAX, GRID_SIZE_MIN } from '../lib/pixelGrid';
 import { addExcludedApp, patchSection, removeExcludedApp } from '../lib/settingsUpdate';
-import type { GestureSettings, SnapSettings } from '../lib/types';
+import type { AlignmentSettings, GestureSettings, SnapSettings } from '../lib/types';
 import { useAppState } from '../state/appStateContext';
 
 /** Live summary of the current mouse bindings. */
 export function CheatSheetCard({
   gestures,
   snapping,
+  alignment,
   managementEnabled,
 }: {
   gestures: GestureSettings;
   snapping: SnapSettings;
+  alignment: AlignmentSettings;
   managementEnabled: boolean;
 }) {
-  const sheet = buildCheatSheet(gestures, snapping, managementEnabled);
+  const sheet = buildCheatSheet(gestures, snapping, alignment, managementEnabled);
   return (
     <Card title="Cheat sheet" icon="info" description="Follows the settings on this page." padded>
       <div className={cx('cheat-sheet', !sheet.active && 'is-inactive')}>
@@ -56,6 +60,81 @@ export function CheatSheetCard({
           </ul>
         )}
       </div>
+    </Card>
+  );
+}
+
+const ORIENTATION_DESCRIPTION =
+  'While you move a window, a label shows its position in pixels from the top-left corner of its screen and how ' +
+  'far it has moved. When you are not snapping, thin lines mark edges and centres that line up exactly with a ' +
+  'screen edge, another window, a centre line or a line of the snapping grid. This never changes where the window goes.';
+
+const GRID_DESCRIPTION =
+  'While you move or resize a window, faint lines in the outline and guide colour cover every screen, starting at ' +
+  'its top-left corner. Every fifth line is solid. Clicks pass through the grid, and it disappears when you let go.';
+
+/** Pixel orientation and the visible pixel grid shown during gestures. */
+export function PixelGridCard() {
+  const { settings, commitSettings, editSettings } = useAppState();
+  const { gestures, snapping, alignment } = settings;
+  const gesturesOff = !gestures.enabled;
+  const snapOff = gesturesOff || !snapping.enabled;
+  const noMoveButton = gestures.moveButton === null;
+  const noButtons = noMoveButton && gestures.resizeButton === null;
+  const gridOff = gesturesOff || noButtons || !alignment.showGrid;
+  const snapKey = MODIFIER_LABELS[snapping.modifier];
+  const orientationHint = gestures.enabled && noMoveButton ? ' Choose a button under “Move with” to use it.' : '';
+  const snapHint = gestures.enabled && !snapping.enabled ? ' Turn on Snapping to use this.' : '';
+
+  const setAlignment = (patch: Partial<AlignmentSettings>): void => {
+    void commitSettings((current) => patchSection(current, 'alignment', patch));
+  };
+  const editAlignment = (patch: Partial<AlignmentSettings>): void => {
+    editSettings((current) => patchSection(current, 'alignment', patch));
+  };
+
+  return (
+    <Card
+      title="Pixel grid and orientation"
+      icon="grid"
+      description="Exact positions and a visible grid help you place windows to the pixel."
+    >
+      <SwitchSetting
+        label="Pixel orientation"
+        description={`${ORIENTATION_DESCRIPTION}${orientationHint}`}
+        disabled={gesturesOff || noMoveButton}
+        checked={alignment.pixelOrientation}
+        onChange={(pixelOrientation) => setAlignment({ pixelOrientation })}
+      />
+      <SwitchSetting
+        label="Visible pixel grid"
+        description={GRID_DESCRIPTION}
+        disabled={gesturesOff || noButtons}
+        checked={alignment.showGrid}
+        onChange={(showGrid) => setAlignment({ showGrid })}
+      />
+      <NumberSetting
+        label="Grid size"
+        description="Distance between two lines. Scales with the display scaling of each screen."
+        indent
+        disabled={gridOff}
+        value={alignment.gridSize}
+        min={GRID_SIZE_MIN}
+        max={GRID_SIZE_MAX}
+        unit="px"
+        onChange={(gridSize) => editAlignment({ gridSize })}
+      />
+      <div className="setting-block setting-block--indent">
+        <GridPreview gridSize={alignment.gridSize} color={gestures.overlayColor} disabled={gridOff} />
+      </div>
+      <SwitchSetting
+        label="Snap to the pixel grid"
+        description={`While the grid is visible, holding ${snapKey} also snaps window edges to its lines when no screen edge, other window or other snap target is within reach.${snapHint}`}
+        indent
+        disabled={snapOff || !alignment.showGrid}
+        checked={alignment.snapToGrid}
+        onChange={(snapToGrid) => setAlignment({ snapToGrid })}
+      />
     </Card>
   );
 }

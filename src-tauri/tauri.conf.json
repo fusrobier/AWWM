@@ -22,6 +22,7 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "publisher": "AWWM contributors",
+    "homepage": "https://github.com/fusrobier/AWWM",
     "copyright": "Copyright (c) 2026 AWWM contributors. MIT License.",
     "category": "Utility",
     "shortDescription": "Advanced window manager for Windows",
@@ -39,17 +40,24 @@
       "../docs/WINDOWS_LIMITATIONS.md": "docs/WINDOWS_LIMITATIONS.md",
       "../docs/ARCHITECTURE.md": "docs/ARCHITECTURE.md",
       "../README.md": "docs/README.md",
-      "../LICENSE": "docs/LICENSE.txt"
+      "../LICENSE": "docs/LICENSE.txt",
+      "../docs/INSTALLATION.md": "docs/INSTALLATION.md",
+      "../docs/RELEASE_NOTES_1.0.0.md": "docs/RELEASE_NOTES_1.0.0.md",
+      "../CHANGELOG.md": "docs/CHANGELOG.md"
     },
     "windows": {
-      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "webviewInstallMode": { "type": "embedBootstrapper", "silent": false },
       "nsis": {
         "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
         "displayLanguageSelector": false,
         "installerHooks": "./installer-hooks.nsh"
       },
       "wix": {
-        "language": "en-US"
+        "upgradeCode": "68befb83-28ae-5374-a25c-9486d5188f39",
+        "language": "en-US",
+        "fragmentPaths": ["./wix/awwm-graceful-exit.wxs"],
+        "componentGroupRefs": ["AWWMGracefulExit"]
       }
     }
   }

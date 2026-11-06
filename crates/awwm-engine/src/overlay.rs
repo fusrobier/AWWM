@@ -1,5 +1,5 @@
 //! overlay_manager: click-through, non-activating overlay windows (pin frames, resize
-//! outline, size label, snap guides).
+//! outline, size and position labels, snap and alignment guides, the pixel grid).
 //!
 //! Overlays are `WS_POPUP` windows with `WS_EX_LAYERED | WS_EX_TRANSPARENT |
 //! WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST`: they never take focus, never
@@ -15,25 +15,28 @@ use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CombineRgn, CreateFontW, CreateRectRgn,
-    CreateRoundRectRgn, CreateSolidBrush, DEFAULT_CHARSET, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
+    BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CombineRgn, CreateCompatibleBitmap,
+    CreateCompatibleDC, CreateFontW, CreatePatternBrush, CreateRectRgn, CreateRoundRectRgn,
+    CreateSolidBrush, DEFAULT_CHARSET, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteDC,
     DeleteObject, DrawTextW, EndPaint, FF_DONTCARE, FW_SEMIBOLD, FillRect, GetDC,
-    GetTextExtentPoint32W, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, PAINTSTRUCT, RGN_DIFF, ReleaseDC,
-    SelectObject, SetBkMode, SetTextColor, SetWindowRgn, TRANSPARENT,
+    GetTextExtentPoint32W, HBRUSH, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, PAINTSTRUCT, RGN_DIFF,
+    ReleaseDC, SelectObject, SetBkMode, SetPixel, SetTextColor, SetWindowRgn, TRANSPARENT,
+    UpdateWindow,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, HTTRANSPARENT,
-    LWA_ALPHA, MA_NOACTIVATE, RegisterClassExW, SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    SetLayeredWindowAttributes, ShowWindow, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_NCHITTEST,
-    WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    LWA_ALPHA, LWA_COLORKEY, MA_NOACTIVATE, RegisterClassExW, SW_HIDE, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SetLayeredWindowAttributes, ShowWindow, WM_ERASEBKGND, WM_MOUSEACTIVATE,
+    WM_NCHITTEST, WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
 use awwm_core::geometry::logical_to_physical;
+use awwm_core::pixel_grid;
 use awwm_core::snap::{Orientation, SnapGuide};
-use awwm_core::{Point, Rect};
+use awwm_core::{MonitorInfo, Point, Rect};
 
 use crate::win::WindowHandle;
 use crate::win::window::{self, ZOrder};
@@ -47,6 +50,17 @@ fn colorref((r, g, b): Rgb) -> COLORREF {
     COLORREF(u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16))
 }
 
+/// Pixel-grid lines of one monitor in client coordinates.
+struct GridPaint {
+    /// `(x, major)` of vertical lines.
+    vertical: Vec<(i32, bool)>,
+    /// `(y, major)` of horizontal lines.
+    horizontal: Vec<(i32, bool)>,
+    line: COLORREF,
+    /// Transparent colour key (never equal to `line`).
+    key: COLORREF,
+}
+
 /// Per-window paint state, owned by the overlay's thread.
 #[derive(Default)]
 struct PaintState {
@@ -54,6 +68,7 @@ struct PaintState {
     foreground: COLORREF,
     text: Vec<u16>,
     font: Option<HFONT>,
+    grid: Option<GridPaint>,
 }
 
 thread_local! {
@@ -114,6 +129,13 @@ fn paint(hwnd: HWND) {
         PAINT.with(|map| {
             let map = map.borrow();
             let state = map.get(&(hwnd.0 as isize));
+            if let Some(grid) = state.and_then(|s| s.grid.as_ref()) {
+                let mut client = RECT::default();
+                let _ =
+                    windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &raw mut client);
+                paint_grid(hdc, &client, grid);
+                return;
+            }
             let bg = state.map_or(COLORREF(0), |s| s.background);
             let brush = CreateSolidBrush(bg);
             let mut client = RECT::default();
@@ -137,6 +159,85 @@ fn paint(hwnd: HWND) {
             }
         });
         let _ = EndPaint(hwnd, &raw const ps);
+    }
+}
+
+/// A 2x2 checkerboard brush (`line` where `x + y` is even, `key` elsewhere) that draws
+/// 1 px lines dotted: every other pixel of the line is transparent.
+///
+/// # Safety
+/// `hdc` must be a valid device context of the calling thread. The caller owns the
+/// returned brush and bitmap and must delete both.
+unsafe fn checker_brush(hdc: HDC, line: COLORREF, key: COLORREF) -> Option<(HBRUSH, HGDIOBJ)> {
+    // SAFETY: (caller contract) valid DC; every object created here is either returned to
+    // the caller or deleted before returning.
+    unsafe {
+        let bitmap = CreateCompatibleBitmap(hdc, 2, 2);
+        if bitmap.is_invalid() {
+            return None;
+        }
+        let mem = CreateCompatibleDC(Some(hdc));
+        if mem.is_invalid() {
+            let _ = DeleteObject(HGDIOBJ(bitmap.0));
+            return None;
+        }
+        let old = SelectObject(mem, HGDIOBJ(bitmap.0));
+        SetPixel(mem, 0, 0, line);
+        SetPixel(mem, 1, 1, line);
+        SetPixel(mem, 1, 0, key);
+        SetPixel(mem, 0, 1, key);
+        SelectObject(mem, old);
+        let _ = DeleteDC(mem);
+        let brush = CreatePatternBrush(bitmap);
+        if brush.is_invalid() {
+            let _ = DeleteObject(HGDIOBJ(bitmap.0));
+            return None;
+        }
+        Some((brush, HGDIOBJ(bitmap.0)))
+    }
+}
+
+/// Paints the colour key over the whole client area, then the minor lines dotted and the
+/// major lines solid on top (so majors stay continuous where lines cross).
+fn paint_grid(hdc: HDC, client: &RECT, grid: &GridPaint) {
+    // SAFETY: called from WM_PAINT with the window's paint DC; every brush and bitmap is
+    // deleted before returning and none stays selected into the DC.
+    unsafe {
+        let key = CreateSolidBrush(grid.key);
+        FillRect(hdc, client, key);
+        let _ = DeleteObject(HGDIOBJ(key.0));
+        let solid = CreateSolidBrush(grid.line);
+        let dotted = checker_brush(hdc, grid.line, grid.key);
+        for major in [false, true] {
+            let brush = if major {
+                solid
+            } else {
+                dotted.map_or(solid, |(b, _)| b)
+            };
+            for &(x, _) in grid.vertical.iter().filter(|(_, m)| *m == major) {
+                let r = RECT {
+                    left: x,
+                    top: client.top,
+                    right: x + 1,
+                    bottom: client.bottom,
+                };
+                FillRect(hdc, &raw const r, brush);
+            }
+            for &(y, _) in grid.horizontal.iter().filter(|(_, m)| *m == major) {
+                let r = RECT {
+                    left: client.left,
+                    top: y,
+                    right: client.right,
+                    bottom: y + 1,
+                };
+                FillRect(hdc, &raw const r, brush);
+            }
+        }
+        let _ = DeleteObject(HGDIOBJ(solid.0));
+        if let Some((brush, bitmap)) = dotted {
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+            let _ = DeleteObject(bitmap);
+        }
     }
 }
 
@@ -205,14 +306,19 @@ impl OverlayWindow {
         self.handle
     }
 
-    /// Changes the fill colour.
+    /// Changes the fill colour (repaints only when it actually changes: guides and outlines
+    /// call this on every mouse move).
     pub fn set_color(&self, color: Rgb) {
-        PAINT.with(|m| {
-            if let Some(s) = m.borrow_mut().get_mut(&self.handle.raw()) {
+        let changed = PAINT.with(|m| {
+            m.borrow_mut().get_mut(&self.handle.raw()).is_some_and(|s| {
+                let changed = s.background != colorref(color);
                 s.background = colorref(color);
-            }
+                changed
+            })
         });
-        self.invalidate();
+        if changed {
+            self.invalidate();
+        }
     }
 
     fn invalidate(&self) {
@@ -244,6 +350,32 @@ impl OverlayWindow {
     #[must_use]
     pub const fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    /// Sets the uniform alpha and, optionally, a colour that is fully transparent.
+    fn set_layered(&self, key: Option<COLORREF>, alpha: u8) {
+        let flags = if key.is_some() {
+            LWA_COLORKEY | LWA_ALPHA
+        } else {
+            LWA_ALPHA
+        };
+        // SAFETY: plain call on our own layered window.
+        unsafe {
+            let _ = SetLayeredWindowAttributes(
+                self.handle.hwnd(),
+                key.unwrap_or(COLORREF(0)),
+                alpha,
+                flags,
+            );
+        }
+    }
+
+    /// Paints pending invalid regions now (synchronous `WM_PAINT`).
+    fn paint_now(&self) {
+        // SAFETY: plain call on our own window, on its thread.
+        unsafe {
+            let _ = UpdateWindow(self.handle.hwnd());
+        }
     }
 
     /// Applies a window region in window-relative coordinates. Ownership of the region
@@ -342,6 +474,8 @@ impl FrameOverlay {
 pub struct LabelOverlay {
     window: OverlayWindow,
     font_dpi: u32,
+    /// `(width, height, radius)` of the current window region.
+    shape: Option<(i32, i32, i32)>,
 }
 
 impl LabelOverlay {
@@ -357,6 +491,7 @@ impl LabelOverlay {
         Some(Self {
             window,
             font_dpi: 0,
+            shape: None,
         })
     }
 
@@ -442,9 +577,13 @@ impl LabelOverlay {
                 })
         });
         let radius = logical_to_physical(8, dpi);
-        // SAFETY: the region is handed to the system by set_region.
-        let region = unsafe { CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius) };
-        self.window.set_region(region);
+        if self.shape != Some((w, h, radius)) {
+            // Only when the size changes: the label is updated on every mouse move.
+            // SAFETY: the region is handed to the system by set_region.
+            let region = unsafe { CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius) };
+            self.window.set_region(region);
+            self.shape = Some((w, h, radius));
+        }
         self.window
             .show_at(Rect::from_xywh(x, y, w, h), ZOrder::Topmost);
         if changed {
@@ -501,10 +640,114 @@ impl GuideOverlays {
     }
 }
 
+/// Opacity of the pixel grid windows (about 38 %).
+pub const GRID_ALPHA: u8 = 96;
+
+/// The visible pixel grid: one colour-keyed, click-through overlay window per monitor,
+/// placed directly below the window being moved so it never covers it. The windows exist
+/// only while a gesture runs; [`GridOverlay::hide`] destroys them, so an idle AWWM keeps
+/// no monitor-sized surfaces. Building it is slow, so it lives on its own thread
+/// (`crate::grid_thread`), never on the gesture thread.
+#[derive(Debug, Default)]
+pub struct GridOverlay {
+    windows: Vec<OverlayWindow>,
+}
+
+/// A colour key that differs from `line` (pure magenta, or pure green for a magenta line).
+fn grid_key(line: Rgb) -> COLORREF {
+    if line == (255, 0, 255) {
+        colorref((0, 255, 0))
+    } else {
+        colorref((255, 0, 255))
+    }
+}
+
+impl GridOverlay {
+    /// Shows a grid of `size` logical pixels on every monitor, below `below` in Z order.
+    /// Each window is painted while fully transparent and only then given its alpha, so a
+    /// half-painted monitor-sized window never flashes. `cancelled` is checked before each
+    /// monitor; returns `false` when it stopped early (the windows built so far stay).
+    pub fn show(
+        &mut self,
+        monitors: &[MonitorInfo],
+        size: u32,
+        color: Rgb,
+        below: WindowHandle,
+        cancelled: impl Fn() -> bool,
+    ) -> bool {
+        self.hide();
+        let key = grid_key(color);
+        for m in monitors.iter().filter(|m| !m.bounds.is_empty()) {
+            if cancelled() {
+                return false;
+            }
+            let Some(mut window) = OverlayWindow::create(0, color) else {
+                continue;
+            };
+            window.set_layered(Some(key), 0);
+            let b = m.bounds;
+            let axis = |origin: i32, extent: i32| -> Vec<(i32, bool)> {
+                pixel_grid::lines(origin, extent, size, m.dpi)
+                    .into_iter()
+                    .map(|l| (l.position - origin, l.major))
+                    .collect()
+            };
+            let paint = GridPaint {
+                vertical: axis(b.left, b.width()),
+                horizontal: axis(b.top, b.height()),
+                line: colorref(color),
+                key,
+            };
+            PAINT.with(|p| {
+                if let Some(state) = p.borrow_mut().get_mut(&window.handle().raw()) {
+                    state.grid = Some(paint);
+                }
+            });
+            window.show_at(b, ZOrder::After(below));
+            window.paint_now();
+            window.set_layered(Some(key), GRID_ALPHA);
+            self.windows.push(window);
+        }
+        true
+    }
+
+    /// Removes the grid immediately (destroys its windows).
+    pub fn hide(&mut self) {
+        self.windows.clear();
+    }
+}
+
 /// Text of the live size label, e.g. `1280 × 720`.
 #[must_use]
 pub fn size_label(width: i32, height: i32) -> String {
     format!("{width} \u{00d7} {height}")
+}
+
+/// `n` with a typographic minus sign for negative values.
+fn number(n: i32) -> String {
+    if n < 0 {
+        format!("\u{2212}{}", n.unsigned_abs())
+    } else {
+        n.to_string()
+    }
+}
+
+/// `n` with an explicit sign (`+12`, `−12`, `0`).
+fn signed(n: i32) -> String {
+    if n > 0 { format!("+{n}") } else { number(n) }
+}
+
+/// Text of the position read-out while moving, e.g. `X 640 · Y 320 · Δ +120, −45`:
+/// the position of the frame's top-left corner relative to its monitor and, while the
+/// window is still on the monitor where the drag started, the distance moved (there is no
+/// common logical unit across monitors with different scaling). Logical pixels.
+#[must_use]
+pub fn position_label(x: i32, y: i32, moved: Option<(i32, i32)>) -> String {
+    let at = format!("X {} \u{00b7} Y {}", number(x), number(y));
+    match moved {
+        Some((dx, dy)) => format!("{at} \u{00b7} \u{0394} {}, {}", signed(dx), signed(dy)),
+        None => at,
+    }
 }
 
 #[cfg(test)]
@@ -519,5 +762,28 @@ mod tests {
     #[test]
     fn size_label_format() {
         assert_eq!(size_label(1280, 720), "1280 \u{00d7} 720");
+    }
+
+    #[test]
+    fn position_label_format() {
+        assert_eq!(
+            position_label(640, 320, Some((120, -45))),
+            "X 640 \u{00b7} Y 320 \u{00b7} \u{0394} +120, \u{2212}45"
+        );
+        assert_eq!(
+            position_label(-20, 0, Some((0, 0))),
+            "X \u{2212}20 \u{00b7} Y 0 \u{00b7} \u{0394} 0, 0"
+        );
+        assert_eq!(position_label(5, 7, None), "X 5 \u{00b7} Y 7");
+        assert_eq!(
+            position_label(i32::MIN, 1, Some((1, i32::MIN))),
+            "X \u{2212}2147483648 \u{00b7} Y 1 \u{00b7} \u{0394} +1, \u{2212}2147483648"
+        );
+    }
+
+    #[test]
+    fn grid_key_never_equals_the_line_colour() {
+        assert_ne!(grid_key((255, 0, 255)), colorref((255, 0, 255)));
+        assert_ne!(grid_key((59, 130, 246)), colorref((59, 130, 246)));
     }
 }

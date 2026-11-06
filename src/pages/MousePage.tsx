@@ -34,7 +34,7 @@ import {
 import type { GestureScope, GestureSettings, MouseButton, SnapSettings } from '../lib/types';
 import { useAppState } from '../state/appStateContext';
 import { HotkeyEditor } from './HotkeyEditor';
-import { CheatSheetCard, ExcludedAppsCard } from './MouseSections';
+import { CheatSheetCard, ExcludedAppsCard, PixelGridCard } from './MouseSections';
 
 type ButtonChoice = MouseButton | 'none';
 
@@ -86,7 +86,12 @@ export function MousePage() {
         status={<SaveIndicator status={saveStatus} error={saveError} />}
       />
 
-      <CheatSheetCard gestures={gestures} snapping={snapping} managementEnabled={snapshot.managementEnabled} />
+      <CheatSheetCard
+        gestures={gestures}
+        snapping={snapping}
+        alignment={settings.alignment}
+        managementEnabled={snapshot.managementEnabled}
+      />
 
       <Card title="Move and resize" icon="mouse">
         <SwitchSetting
@@ -250,6 +255,8 @@ export function MousePage() {
           onChange={(showGuides) => setSnapping({ showGuides })}
         />
       </Card>
+
+      <PixelGridCard />
 
       <ExcludedAppsCard />
 

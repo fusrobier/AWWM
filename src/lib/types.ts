@@ -34,6 +34,11 @@ export interface GeneralSettings {
   startWithWindows: boolean;
   startMinimized: boolean;
   runInBackground: boolean;
+  /**
+   * Minimizing the settings window hides it in the notification area (tray) instead of
+   * the taskbar; AWWM keeps running. Closing is governed by `runInBackground`.
+   */
+  minimizeToTray: boolean;
   restoreOnExit: boolean;
   recoverSession: boolean;
   /** 0–600 seconds. */
@@ -87,6 +92,21 @@ export interface SnapSettings {
   showGuides: boolean;
 }
 
+/** Pixel orientation and the visible pixel grid during gestures. */
+export interface AlignmentSettings {
+  /**
+   * While moving a window: show its position in pixels and mark exact alignments.
+   * Never changes where the window goes.
+   */
+  pixelOrientation: boolean;
+  /** Draw a pixel grid on every monitor while moving or resizing. */
+  showGrid: boolean;
+  /** Grid spacing in logical pixels, 4–200. */
+  gridSize: number;
+  /** While the snap key is held and the grid is visible, edges also snap to grid lines. */
+  snapToGrid: boolean;
+}
+
 export interface Hotkey {
   ctrl: boolean;
   alt: boolean;
@@ -110,6 +130,7 @@ export interface Settings {
   pinning: PinningSettings;
   gestures: GestureSettings;
   snapping: SnapSettings;
+  alignment: AlignmentSettings;
   hotkeys: HotkeySettings;
   rules: Rule[];
 }

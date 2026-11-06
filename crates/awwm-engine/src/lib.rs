@@ -13,6 +13,7 @@ pub mod enumerator;
 pub mod error;
 pub mod events;
 pub mod gesture;
+pub mod grid_thread;
 pub mod hotkeys;
 pub mod input_hook;
 pub mod manager;
@@ -33,16 +34,18 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, LPARAM, WAIT_OBJECT_0, WPARAM};
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, HWND_MESSAGE, PostMessageW, PostThreadMessageW, RegisterWindowMessageW, WM_QUIT,
+    FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, PostMessageW, PostThreadMessageW,
+    RegisterWindowMessageW, WM_QUIT,
 };
 use windows::core::PCWSTR;
 
 use awwm_core::settings::Settings;
 
 use engine_thread::{Command, Peers, Reply};
-pub use engine_thread::{ENGINE_WINDOW_CLASS, SHOW_MESSAGE_NAME};
+pub use engine_thread::{ENGINE_WINDOW_CLASS, EXIT_MESSAGE_NAME, SHOW_MESSAGE_NAME};
 pub use error::{EngineError, EngineResult};
 pub use shared::{EventSink, GestureMsg};
 pub use types::{
@@ -379,6 +382,61 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         self.stop(true);
+    }
+}
+
+/// Asks a running AWWM instance (in this session) to exit normally — managed windows are
+/// restored as configured — and waits until its process has ended, at most `timeout`.
+/// Returns `true` when no instance is running any more (also when none was running).
+/// Used by `awwm.exe --exit`, e.g. from the MSI before files are replaced or removed.
+#[must_use]
+pub fn request_running_instance_exit(timeout: Duration) -> bool {
+    // SAFETY: looks up a message-only window by class, opens its process only for waiting,
+    // posts a pointer-free registered message, and closes the process handle it opened.
+    unsafe {
+        let Ok(hwnd) = FindWindowExW(
+            Some(HWND_MESSAGE),
+            None,
+            ENGINE_WINDOW_CLASS,
+            PCWSTR::null(),
+        ) else {
+            return true;
+        };
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&raw mut pid));
+        let process = OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok();
+        let msg = RegisterWindowMessageW(EXIT_MESSAGE_NAME);
+        if msg == 0 || PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0)).is_err() {
+            if let Some(p) = process {
+                let _ = CloseHandle(p);
+            }
+            return false;
+        }
+        let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        match process {
+            Some(p) => {
+                let ended = WaitForSingleObject(p, millis) == WAIT_OBJECT_0;
+                let _ = CloseHandle(p);
+                ended
+            }
+            // Cannot wait on the process: wait for its engine window to disappear instead.
+            None => {
+                let deadline = std::time::Instant::now() + timeout;
+                while std::time::Instant::now() < deadline {
+                    let found = FindWindowExW(
+                        Some(HWND_MESSAGE),
+                        None,
+                        ENGINE_WINDOW_CLASS,
+                        PCWSTR::null(),
+                    );
+                    if found.is_err() {
+                        return true;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                false
+            }
+        }
     }
 }
 

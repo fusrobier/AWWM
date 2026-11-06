@@ -106,4 +106,6 @@ pub enum EngineEvent {
     HotkeysChanged(Vec<HotkeyStatus>),
     /// Another AWWM instance asked this one to show its settings window.
     ShowRequested,
+    /// Another program (the installer or uninstaller) asked AWWM to exit normally.
+    ExitRequested,
 }

@@ -11,6 +11,7 @@
 //! frames exactly adjacent.
 
 use crate::geometry::{MonitorInfo, Rect, monitor_index_from_rect};
+use crate::pixel_grid;
 use crate::resize::{ResizeEdges, SizeConstraints};
 
 /// Upper bound applied to [`GridSpec::columns`] and [`GridSpec::rows`] so that the work done
@@ -24,6 +25,13 @@ pub struct GridSpec {
     pub columns: u32,
     /// Number of rows; yields `rows + 1` horizontal lines (0 disables horizontal lines).
     pub rows: u32,
+}
+
+/// The visible pixel grid (see [`crate::pixel_grid`]) as a snap source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixelGridSpec {
+    /// Grid spacing in logical pixels, converted with the effective DPI of the monitor.
+    pub size: u32,
 }
 
 /// What to snap to and how far snapping reaches.
@@ -41,6 +49,10 @@ pub struct SnapConfig {
     pub center_lines: bool,
     /// Snap to a grid over the work area of the monitor that holds most of the frame.
     pub grid: Option<GridSpec>,
+    /// Snap to the pixel grid of the monitor that holds most of the frame. Pixel-grid lines
+    /// are a fallback: on each axis (or edge) they are used only when no other enabled
+    /// source is within the threshold, so a fine grid never hides window and screen edges.
+    pub pixel_grid: Option<PixelGridSpec>,
 }
 
 /// The surroundings a frame can snap to.
@@ -73,6 +85,8 @@ pub enum SnapSource {
     WindowEdge,
     /// A grid line.
     Grid,
+    /// A line of the visible pixel grid.
+    PixelGrid,
     /// A work-area centre line.
     Center,
 }
@@ -85,7 +99,8 @@ impl SnapSource {
             SnapSource::MonitorEdge => 1,
             SnapSource::WindowEdge => 2,
             SnapSource::Grid => 3,
-            SnapSource::Center => 4,
+            SnapSource::PixelGrid => 4,
+            SnapSource::Center => 5,
         }
     }
 }
@@ -150,11 +165,14 @@ impl Line {
 }
 
 /// Candidate lines of both axes: `x` holds vertical lines, `y` horizontal ones, each in input
-/// order (monitors and windows in environment order).
+/// order (monitors and windows in environment order). Pixel-grid lines are kept apart in
+/// `px`/`py` because they are only a fallback (see [`SnapConfig::pixel_grid`]).
 #[derive(Debug, Default)]
 struct Candidates {
     x: Vec<Line>,
     y: Vec<Line>,
+    px: Vec<Line>,
+    py: Vec<Line>,
 }
 
 impl Candidates {
@@ -188,11 +206,16 @@ impl Candidates {
                 );
             }
         }
-        if let Some(grid) = cfg.grid {
+        if cfg.grid.is_some() || cfg.pixel_grid.is_some() {
             let dominant =
                 monitor_index_from_rect(&env.monitors, frame).and_then(|i| env.monitors.get(i));
             if let Some(m) = dominant {
-                c.push_grid(&m.work_area, grid);
+                if let Some(grid) = cfg.grid {
+                    c.push_grid(&m.work_area, grid);
+                }
+                if let Some(spec) = cfg.pixel_grid {
+                    c.push_pixel_grid(frame, m, spec);
+                }
             }
         }
         if with_center && cfg.center_lines {
@@ -275,6 +298,38 @@ impl Candidates {
                 end: work.right,
                 source: SnapSource::Grid,
             });
+        }
+    }
+}
+
+impl Candidates {
+    /// Adds the pixel-grid lines of monitor `m` that bracket the frame's edges (the only
+    /// ones that can be nearest to an edge), each spanning the whole monitor. Generating
+    /// only these keeps the work per mouse move independent of the grid size.
+    fn push_pixel_grid(&mut self, frame: &Rect, m: &MonitorInfo, spec: PixelGridSpec) {
+        let b = &m.bounds;
+        if b.is_empty() {
+            return;
+        }
+        for feature in [frame.left, frame.right] {
+            for pos in pixel_grid::bracketing_lines(b.left, b.width(), feature, spec.size, m.dpi) {
+                self.px.push(Line {
+                    pos,
+                    start: b.top,
+                    end: b.bottom,
+                    source: SnapSource::PixelGrid,
+                });
+            }
+        }
+        for feature in [frame.top, frame.bottom] {
+            for pos in pixel_grid::bracketing_lines(b.top, b.height(), feature, spec.size, m.dpi) {
+                self.py.push(Line {
+                    pos,
+                    start: b.left,
+                    end: b.right,
+                    source: SnapSource::PixelGrid,
+                });
+            }
         }
     }
 }
@@ -363,11 +418,12 @@ fn nearest_line(lines: &[Line], feature: i32, threshold: i32) -> Option<Line> {
 /// `cfg.threshold` wins and the frame is translated by that distance. Equal distances are
 /// resolved by source priority ([`SnapSource::WorkAreaEdge`] > `MonitorEdge` > `WindowEdge` >
 /// `Grid` > `Center`), then left/top edge before right/bottom edge, then the first candidate
-/// in input order. Snapping on both axes yields corner snaps.
+/// in input order. Only when nothing is in reach on an axis are the pixel-grid lines tried
+/// (same rules). Snapping on both axes yields corner snaps.
 ///
 /// Window edges are only candidates when the frames (nearly) overlap on the perpendicular
-/// axis, see [`Rect::vertical_spans_touch`]. Grid lines come from the monitor holding most of
-/// the frame only.
+/// axis, see [`Rect::vertical_spans_touch`]. Grid and pixel-grid lines come from the monitor
+/// holding most of the frame only.
 ///
 /// Returns one guide per snapped axis, vertical first. A frame that is already aligned
 /// (distance 0) still yields its guide. With `threshold <= 0` or no candidate in reach, the
@@ -379,8 +435,11 @@ pub fn snap_move(frame: Rect, env: &SnapEnvironment, cfg: &SnapConfig) -> SnapRe
     }
     let c = Candidates::collect(&frame, env, cfg, true);
     let centre = frame.center();
-    let snap_x = best_move_snap(&c.x, frame.left, frame.right, centre.x, cfg.threshold);
-    let snap_y = best_move_snap(&c.y, frame.top, frame.bottom, centre.y, cfg.threshold);
+    let t = cfg.threshold;
+    let snap_x = best_move_snap(&c.x, frame.left, frame.right, centre.x, t)
+        .or_else(|| best_move_snap(&c.px, frame.left, frame.right, centre.x, t));
+    let snap_y = best_move_snap(&c.y, frame.top, frame.bottom, centre.y, t)
+        .or_else(|| best_move_snap(&c.py, frame.top, frame.bottom, centre.y, t));
     let rect = frame.translate(snap_x.map_or(0, |(_, d)| d), snap_y.map_or(0, |(_, d)| d));
 
     let mut guides = Vec::new();
@@ -393,12 +452,70 @@ pub fn snap_move(frame: Rect, env: &SnapEnvironment, cfg: &SnapConfig) -> SnapRe
     SnapResult { rect, guides }
 }
 
+/// Guides for the edges and centre lines of `frame` that already line up **exactly**
+/// (0 px) with a candidate line. The frame is never moved: this is the alignment feedback
+/// shown while moving without snapping ("pixel orientation").
+///
+/// Candidates are the same as for [`snap_move`] with the same `cfg` (enabled sources, and
+/// window edges only within `cfg.threshold` on the perpendicular axis), except the pixel
+/// grid: it is visible anyway, and a monitor-long guide every few pixels would only flicker.
+/// On each axis the
+/// frame's low edge, high edge and centre are checked (the centre against centre lines
+/// only, edges against all other lines); each yields at most one guide, from the
+/// highest-priority source, and a position is marked only once. Vertical guides come first.
+#[must_use]
+pub fn alignment_guides(frame: Rect, env: &SnapEnvironment, cfg: &SnapConfig) -> Vec<SnapGuide> {
+    let without_pixel_grid = SnapConfig {
+        pixel_grid: None,
+        ..*cfg
+    };
+    let c = Candidates::collect(&frame, env, &without_pixel_grid, true);
+    let centre = frame.center();
+    let axes = [
+        (
+            &c.x,
+            Orientation::Vertical,
+            [frame.left, frame.right, centre.x],
+            (frame.top, frame.bottom),
+        ),
+        (
+            &c.y,
+            Orientation::Horizontal,
+            [frame.top, frame.bottom, centre.y],
+            (frame.left, frame.right),
+        ),
+    ];
+    let mut guides = Vec::new();
+    for (lines, orientation, features, (start, end)) in axes {
+        let mut marked: Vec<i32> = Vec::with_capacity(3);
+        for (index, feature) in features.into_iter().enumerate() {
+            let centre_feature = index == 2;
+            let best = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| {
+                    l.pos == feature && (l.source == SnapSource::Center) == centre_feature
+                })
+                .min_by_key(|(i, l)| (l.source.rank(), *i))
+                .map(|(_, l)| *l);
+            if let Some(line) = best
+                && !marked.contains(&line.pos)
+            {
+                marked.push(line.pos);
+                guides.push(line.guide(orientation, start, end));
+            }
+        }
+    }
+    guides
+}
+
 /// Snaps the dragged edges of a frame that is being resized.
 ///
 /// Only the edges in `edges` may move; all other edges keep their exact position. Each active
 /// edge independently snaps to the nearest enabled line on its axis within `cfg.threshold`
 /// (work areas, monitors, other windows, grid; centre lines are never used for resizing), with
-/// ties resolved by source priority and then input order. A snap is applied only if the
+/// ties resolved by source priority and then input order; pixel-grid lines are tried only when
+/// no other line can be used for that edge. A snap is applied only if the
 /// resulting length on that axis is allowed by `constraints` (so it never shrinks below the
 /// minimum, grows above the maximum or crosses the opposite edge); otherwise that edge stays
 /// unsnapped. Edges are processed in the order left, right, top, bottom, and each check uses
@@ -421,6 +538,12 @@ pub fn snap_resize(
     let width_ok = |lo: i32, hi: i32| length_allowed(lo, hi, constraints.width_range());
     let height_ok = |lo: i32, hi: i32| length_allowed(lo, hi, constraints.height_range());
     let t = cfg.threshold;
+    // The nearest usable line of `primary`, else of the pixel-grid `fallback`.
+    let pick = |primary: &[Line], fallback: &[Line], feature: i32, ok: &dyn Fn(i32) -> bool| {
+        nearest_line(primary, feature, t)
+            .filter(|l| ok(l.pos))
+            .or_else(|| nearest_line(fallback, feature, t).filter(|l| ok(l.pos)))
+    };
 
     let mut rect = frame;
     let mut left = None;
@@ -428,25 +551,25 @@ pub fn snap_resize(
     let mut top = None;
     let mut bottom = None;
     if edges.left {
-        left = nearest_line(&c.x, rect.left, t).filter(|l| width_ok(l.pos, rect.right));
+        left = pick(&c.x, &c.px, rect.left, &|pos| width_ok(pos, rect.right));
         if let Some(l) = left {
             rect.left = l.pos;
         }
     }
     if edges.right {
-        right = nearest_line(&c.x, rect.right, t).filter(|l| width_ok(rect.left, l.pos));
+        right = pick(&c.x, &c.px, rect.right, &|pos| width_ok(rect.left, pos));
         if let Some(l) = right {
             rect.right = l.pos;
         }
     }
     if edges.top {
-        top = nearest_line(&c.y, rect.top, t).filter(|l| height_ok(l.pos, rect.bottom));
+        top = pick(&c.y, &c.py, rect.top, &|pos| height_ok(pos, rect.bottom));
         if let Some(l) = top {
             rect.top = l.pos;
         }
     }
     if edges.bottom {
-        bottom = nearest_line(&c.y, rect.bottom, t).filter(|l| height_ok(rect.top, l.pos));
+        bottom = pick(&c.y, &c.py, rect.bottom, &|pos| height_ok(rect.top, pos));
         if let Some(l) = bottom {
             rect.bottom = l.pos;
         }
@@ -475,7 +598,7 @@ fn length_allowed(lo: i32, hi: i32, range: (i32, i32)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Size;
+    use crate::geometry::{Point, Size};
 
     const NO_EDGES: ResizeEdges = ResizeEdges {
         left: false,
@@ -553,6 +676,7 @@ mod tests {
             window_edges: true,
             center_lines: false,
             grid: None,
+            pixel_grid: None,
         }
     }
 
@@ -565,6 +689,7 @@ mod tests {
             window_edges: false,
             center_lines: false,
             grid: None,
+            pixel_grid: None,
         }
     }
 
@@ -638,6 +763,9 @@ mod tests {
                 } else {
                     None
                 },
+                pixel_grid: self.chance(30).then(|| PixelGridSpec {
+                    size: 4 + self.next_u32() % 60,
+                }),
             }
         }
 
@@ -1580,5 +1708,201 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ---------------------------------------------------------------- pixel grid
+
+    fn pixel_grid(threshold: i32, size: u32) -> SnapConfig {
+        SnapConfig {
+            pixel_grid: Some(PixelGridSpec { size }),
+            ..nothing(threshold)
+        }
+    }
+
+    /// One monitor of `w`x`h` physical pixels at `origin` with the given DPI.
+    fn scaled(origin: (i32, i32), w: i32, h: i32, dpi: u32) -> SnapEnvironment {
+        let bounds = Rect::from_xywh(origin.0, origin.1, w, h);
+        SnapEnvironment {
+            monitors: vec![MonitorInfo {
+                bounds,
+                work_area: bounds,
+                dpi,
+                primary: true,
+            }],
+            windows: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn move_snaps_to_the_nearest_pixel_grid_line() {
+        let env = scaled((0, 0), 1920, 1080, 96);
+        let r = snap_move(Rect::from_xywh(23, 57, 400, 300), &env, &pixel_grid(5, 20));
+        assert_eq!(r.rect, Rect::from_xywh(20, 60, 400, 300));
+        assert_eq!(
+            r.guides,
+            vec![
+                vguide(20, 0, 1080, SnapSource::PixelGrid),
+                hguide(60, 0, 1920, SnapSource::PixelGrid)
+            ]
+        );
+        // The right edge can be the nearest feature too: right = 21 + 398 = 419 -> 420.
+        let r = snap_move(Rect::from_xywh(31, 40, 388, 300), &env, &pixel_grid(5, 20));
+        assert_eq!(r.rect.right, 420);
+        // Out of reach: nothing snaps.
+        let r = snap_move(Rect::from_xywh(30, 50, 400, 300), &env, &pixel_grid(5, 20));
+        assert_eq!(r, SnapResult::unchanged(Rect::from_xywh(30, 50, 400, 300)));
+    }
+
+    #[test]
+    fn pixel_grid_snapping_uses_the_monitor_dpi_and_origin() {
+        // 150 %: 20 logical px = 30 physical px, anchored at the monitor's left edge.
+        let env = scaled((-2880, 0), 2880, 1620, 144);
+        let r = snap_move(
+            Rect::from_xywh(-2880 + 33, 62, 600, 400),
+            &env,
+            &pixel_grid(4, 20),
+        );
+        assert_eq!(r.rect.origin(), Point::new(-2880 + 30, 60));
+        // 125 %: 10 logical px lines at 0, 13, 25, 38, 50 (rounded per line).
+        let env = scaled((0, 0), 2400, 1350, 120);
+        let r = snap_move(Rect::from_xywh(36, 24, 500, 500), &env, &pixel_grid(3, 10));
+        assert_eq!(r.rect.origin(), Point::new(38, 25));
+    }
+
+    #[test]
+    fn pixel_grid_lines_come_from_the_dominant_monitor_only() {
+        let mut env = triple();
+        for m in &mut env.monitors {
+            m.dpi = 96;
+        }
+        // Mostly on the right monitor (origin x 1680, y 178): its grid is anchored there.
+        let frame = Rect::from_xywh(1680 + 47, 178 + 22, 500, 300);
+        let r = snap_move(frame, &env, &pixel_grid(4, 25));
+        assert_eq!(r.rect.origin(), Point::new(1680 + 50, 178 + 25));
+    }
+
+    #[test]
+    fn pixel_grid_is_only_a_fallback_for_other_targets() {
+        let env = with_windows(vec![Rect::from_xywh(507, 0, 300, 1040)]);
+        let c = SnapConfig {
+            window_edges: true,
+            ..pixel_grid(16, 20)
+        };
+        // Right edge 10 px from the other window (x = 507), 3 px from a grid line (x = 500):
+        // the window edge wins although the grid line is closer.
+        let r = snap_move(Rect::from_xywh(97, 333, 400, 300), &env, &c);
+        assert_eq!(r.rect.right, 507);
+        assert_eq!(r.guides[0].source, SnapSource::WindowEdge);
+        // Vertically nothing else is in reach, so the grid applies there: top 333 -> 340.
+        assert_eq!(r.rect.top, 340);
+        assert_eq!(r.guides[1].source, SnapSource::PixelGrid);
+        // Out of the window's reach on both axes: the grid is used.
+        let r = snap_move(Rect::from_xywh(51, 333, 400, 300), &env, &c);
+        assert_eq!(r.rect.origin(), Point::new(60, 340));
+    }
+
+    #[test]
+    fn resize_uses_the_pixel_grid_only_when_no_other_line_is_usable() {
+        let env = scaled((0, 0), 1920, 1080, 96);
+        let c = SnapConfig {
+            work_area_edges: true,
+            ..pixel_grid(16, 20)
+        };
+        // Right edge at 1909: the work-area edge (1920) is in reach and wins over 1900.
+        let r = snap_resize(
+            Rect::new(1000, 100, 1909, 500),
+            RIGHT,
+            &env,
+            &c,
+            &unconstrained(),
+        );
+        assert_eq!(r.rect.right, 1920);
+        // The work-area edge would violate the maximum width: the grid line is used instead.
+        let narrow = SizeConstraints {
+            min: Size::new(1, 1),
+            max: Some(Size::new(905, 2000)),
+        };
+        let r = snap_resize(Rect::new(1000, 100, 1909, 500), RIGHT, &env, &c, &narrow);
+        assert_eq!(r.rect.right, 1900);
+        assert_eq!(r.guides[0].source, SnapSource::PixelGrid);
+    }
+
+    #[test]
+    fn resize_snaps_only_the_dragged_edge_to_the_pixel_grid() {
+        let env = scaled((0, 0), 1920, 1080, 96);
+        let frame = Rect::new(100, 100, 607, 413);
+        let r = snap_resize(
+            frame,
+            ResizeEdges::BOTTOM_RIGHT,
+            &env,
+            &pixel_grid(8, 20),
+            &unconstrained(),
+        );
+        assert_eq!(r.rect, Rect::new(100, 100, 600, 420));
+        let r = snap_resize(frame, LEFT, &env, &pixel_grid(8, 20), &unconstrained());
+        assert_eq!(r.rect, Rect::new(100, 100, 607, 413), "already on a line");
+        assert_eq!(r.guides, vec![vguide(100, 0, 1080, SnapSource::PixelGrid)]);
+    }
+
+    // ---------------------------------------------------------------- alignment guides
+
+    #[test]
+    fn alignment_guides_mark_only_exact_alignments() {
+        let env = single();
+        let c = SnapConfig {
+            center_lines: true,
+            ..cfg(16)
+        };
+        // Left edge exactly on the work-area/monitor edge at x = 0.
+        let frame = Rect::from_xywh(0, 300, 400, 300);
+        assert_eq!(
+            alignment_guides(frame, &env, &c),
+            vec![vguide(0, 0, 1040, SnapSource::WorkAreaEdge)]
+        );
+        // One pixel off: nothing, even though snapping would reach it.
+        assert!(alignment_guides(frame.translate(1, 0), &env, &c).is_empty());
+        // Centred horizontally in the work area (centre x = 960).
+        let centred = Rect::from_xywh(760, 301, 400, 300);
+        assert_eq!(
+            alignment_guides(centred, &env, &c),
+            vec![vguide(960, 0, 1040, SnapSource::Center)]
+        );
+    }
+
+    #[test]
+    fn alignment_guides_never_move_the_frame_and_mark_each_position_once() {
+        let env = with_windows(vec![Rect::from_xywh(400, 100, 300, 300)]);
+        let c = cfg(16);
+        // Top edge aligned with the other window's top; left edge touching its right edge.
+        let frame = Rect::from_xywh(700, 100, 200, 200);
+        let guides = alignment_guides(frame, &env, &c);
+        assert_eq!(
+            guides,
+            vec![
+                vguide(700, 100, 400, SnapSource::WindowEdge),
+                hguide(100, 400, 900, SnapSource::WindowEdge)
+            ]
+        );
+        // A frame exactly as wide as the monitor: left and right both aligned.
+        let full = Rect::from_xywh(0, 200, 1920, 300);
+        let g = alignment_guides(full, &single(), &c);
+        assert_eq!(g.len(), 2);
+        assert!(g.iter().all(|g| g.orientation == Orientation::Vertical));
+    }
+
+    #[test]
+    fn alignment_guides_ignore_the_pixel_grid() {
+        let env = scaled((0, 0), 1920, 1080, 96);
+        // Left edge on a grid line (40), but the visible grid already shows that.
+        let frame = Rect::from_xywh(40, 33, 390, 300);
+        assert!(alignment_guides(frame, &env, &pixel_grid(16, 20)).is_empty());
+        let c = SnapConfig {
+            work_area_edges: true,
+            ..pixel_grid(16, 20)
+        };
+        assert_eq!(
+            alignment_guides(frame.with_origin(Point::new(0, 33)), &env, &c),
+            vec![vguide(0, 0, 1080, SnapSource::WorkAreaEdge)]
+        );
     }
 }

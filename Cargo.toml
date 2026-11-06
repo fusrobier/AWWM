@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.90"
 license = "MIT"
 authors = ["AWWM contributors"]
-repository = "https://github.com/awwm/awwm"
+repository = "https://github.com/fusrobier/AWWM"
 publish = false
 
 [workspace.dependencies]

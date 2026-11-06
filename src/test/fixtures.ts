@@ -10,6 +10,7 @@ export function makeSettings(): Settings {
       startWithWindows: false,
       startMinimized: false,
       runInBackground: true,
+      minimizeToTray: true,
       restoreOnExit: true,
       recoverSession: true,
       reattachGraceSecs: 30,
@@ -48,6 +49,12 @@ export function makeSettings(): Settings {
       gridColumns: 4,
       gridRows: 4,
       showGuides: true,
+    },
+    alignment: {
+      pixelOrientation: true,
+      showGrid: false,
+      gridSize: 20,
+      snapToGrid: true,
     },
     hotkeys: {
       togglePin: { ctrl: false, alt: true, shift: false, win: true, key: 'T' },

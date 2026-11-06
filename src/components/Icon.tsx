@@ -107,6 +107,12 @@ const ICONS = {
       <path d="M8 1.5v13M1.5 8h13" />
     </>
   ),
+  grid: (
+    <>
+      <rect x="1.5" y="1.5" width="13" height="13" rx="1.5" />
+      <path d="M5.83 1.5v13M10.17 1.5v13M1.5 5.83h13M1.5 10.17h13" />
+    </>
+  ),
   ban: (
     <>
       <circle cx="8" cy="8" r="6.5" />

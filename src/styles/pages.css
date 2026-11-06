@@ -29,6 +29,10 @@
   border-top: 1px solid var(--border-divider);
 }
 
+.setting-block--indent {
+  padding-left: 48px;
+}
+
 .setting-warning {
   display: flex;
   align-items: center;
@@ -575,6 +579,36 @@
 
 .cheat-notes .icon {
   margin-top: 1px;
+}
+
+.grid-preview {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Drawn at true size by GridPreview; the background is the neutral surface below the grid. */
+.grid-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 160px;
+  border-radius: var(--radius-control);
+  background: var(--bg-app);
+  box-shadow: 0 0 0 1px var(--border-card);
+}
+
+.grid-preview-caption {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+}
+
+.grid-preview.is-disabled .grid-preview-canvas {
+  opacity: 0.55;
+}
+
+.grid-preview.is-disabled .grid-preview-caption {
+  color: var(--text-disabled);
 }
 
 .exclusion-form {
