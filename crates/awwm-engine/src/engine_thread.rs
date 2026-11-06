@@ -49,6 +49,10 @@ use crate::win::{WindowHandle, monitor, process};
 pub const ENGINE_WINDOW_CLASS: PCWSTR = w!("AWWM.Engine");
 /// Registered message a second instance posts to ask for the settings window.
 pub const SHOW_MESSAGE_NAME: PCWSTR = w!("AWWM.ShowSettings");
+/// Registered message the installer and uninstaller post to ask AWWM to exit normally
+/// (managed windows are restored as configured), so files can be replaced without killing
+/// the process.
+pub const EXIT_MESSAGE_NAME: PCWSTR = w!("AWWM.ExitRequested");
 
 /// Rule re-evaluation delays after a window is shown (title or UWP host not ready yet).
 const REEVALUATE_AFTER_MS: [u32; 2] = [500, 2000];
@@ -115,6 +119,7 @@ struct EngineThread {
     session: SessionStore,
     msg_window: WindowHandle,
     show_message: u32,
+    exit_message: u32,
     peers: Peers,
     hotkeys: Hotkeys,
     frames: HashMap<WindowHandle, FrameOverlay>,
@@ -1095,6 +1100,8 @@ pub fn run(
     };
     // SAFETY: registers (or looks up) a system-wide message id for a static string.
     let show_message = unsafe { RegisterWindowMessageW(SHOW_MESSAGE_NAME) };
+    // SAFETY: as above.
+    let exit_message = unsafe { RegisterWindowMessageW(EXIT_MESSAGE_NAME) };
     let mut engine = EngineThread {
         ctx,
         settings,
@@ -1102,6 +1109,7 @@ pub fn run(
         session,
         msg_window,
         show_message,
+        exit_message,
         peers,
         hotkeys: Hotkeys::new(msg_window),
         frames: HashMap::new(),
@@ -1179,6 +1187,12 @@ pub fn run(
             && engine.show_message != 0
         {
             engine.emit(EngineEvent::ShowRequested);
+        } else if msg.hwnd == msg_window.hwnd()
+            && msg.message == engine.exit_message
+            && engine.exit_message != 0
+        {
+            tracing::info!("another program asked AWWM to exit");
+            engine.emit(EngineEvent::ExitRequested);
         } else {
             // SAFETY: standard dispatch (pin-frame overlay painting).
             unsafe {

@@ -13,7 +13,9 @@ use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_APP};
 
 use awwm_core::Point;
 use awwm_core::gesture::{GestureBindings, GestureKind};
-use awwm_core::settings::{GestureScope, Settings, SnapSettings, parse_hex_color};
+use awwm_core::settings::{
+    AlignmentSettings, GestureScope, Settings, SnapSettings, parse_hex_color,
+};
 
 use crate::overlay::Rgb;
 use crate::types::EngineEvent;
@@ -30,6 +32,8 @@ pub const WM_APP_HOOKS: u32 = WM_APP + 4;
 /// Posted by the gesture thread after it moved a pinned window (`lparam` = HWND) so the
 /// engine repositions its frame even if the location event is attributed to our process.
 pub const WM_APP_FRAME_SYNC: u32 = WM_APP + 5;
+/// Wakes the grid thread: the wanted pixel grid changed.
+pub const WM_APP_GRID: u32 = WM_APP + 6;
 
 /// `dwExtraInfo` marker on input injected by AWWM so the hooks can ignore it.
 pub const INJECTED_MARKER: usize = 0x4157_574D; // "AWWM"
@@ -54,6 +58,7 @@ pub struct GestureRuntime {
     pub show_resize_overlay: bool,
     pub overlay_color: Rgb,
     pub snap: SnapSettings,
+    pub alignment: AlignmentSettings,
 }
 
 impl GestureRuntime {
@@ -68,6 +73,7 @@ impl GestureRuntime {
             show_resize_overlay: s.gestures.show_resize_overlay,
             overlay_color: parse_hex_color(&s.gestures.overlay_color).unwrap_or((59, 130, 246)),
             snap: s.snapping.clone(),
+            alignment: s.alignment.clone(),
         }
     }
 }

@@ -5,7 +5,7 @@
 //! `SetWindowPos`. Synchronous calls rate-limit naturally to what the target application
 //! can process, and let us read back the size it actually accepted (min/max track size)
 //! so the anchored edge never drifts. This thread also owns the resize outline, the size
-//! label and the snap guides.
+//! and position labels, the snap and alignment guides and the pixel grid.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,11 +27,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use awwm_core::geometry::{logical_to_physical, physical_to_logical, round_to_i32};
 use awwm_core::gesture::GestureKind;
 use awwm_core::resize::{ResizeEdges, SizeConstraints, anchor_size, resize_frame};
-use awwm_core::snap::{GridSpec, SnapConfig, SnapEnvironment, SnapResult, snap_move, snap_resize};
+use awwm_core::snap::{
+    GridSpec, PixelGridSpec, SnapConfig, SnapEnvironment, SnapResult, alignment_guides, snap_move,
+    snap_resize,
+};
 use awwm_core::{Point, Rect, Size};
 
 use crate::enumerator;
-use crate::overlay::{FrameOverlay, GuideOverlays, LabelOverlay, size_label};
+use crate::grid_thread::{GridRequest, GridThread};
+use crate::overlay::{FrameOverlay, GuideOverlays, LabelOverlay, position_label, size_label};
 use crate::shared::{
     GestureMsg, GestureRuntime, INJECTED_MARKER, SharedState, WM_APP_FRAME_SYNC, WM_APP_GESTURE,
     unpoison,
@@ -54,6 +58,8 @@ struct Active {
     cfg: GestureRuntime,
     start_cursor: Point,
     start_frame: Rect,
+    /// Bounds of the monitor holding most of the window when the gesture started.
+    start_monitor: Option<Rect>,
     /// Window rect at gesture start (used to cancel).
     original_window: Rect,
     /// Placement before a maximized window was restored for moving (used to cancel).
@@ -77,6 +83,10 @@ struct GestureThread {
     outline: Option<FrameOverlay>,
     label: Option<LabelOverlay>,
     guides: GuideOverlays,
+    /// Started on first use; owns the pixel-grid windows.
+    grid: Option<GridThread>,
+    /// A grid was requested for the current gesture.
+    grid_requested: bool,
     blocked_notices: HashMap<WindowHandle, Instant>,
 }
 
@@ -127,7 +137,39 @@ fn snap_config(cfg: &GestureRuntime, dpi: u32) -> SnapConfig {
             columns: s.grid_columns,
             rows: s.grid_rows,
         }),
+        pixel_grid: (cfg.alignment.show_grid && cfg.alignment.snap_to_grid).then_some(
+            PixelGridSpec {
+                size: cfg.alignment.grid_size,
+            },
+        ),
     }
+}
+
+/// Candidate lines for the exact-alignment guides of pixel orientation: the snap sources
+/// (the pixel grid is never used for them, so it is left out).
+fn alignment_config(cfg: &GestureRuntime, dpi: u32) -> SnapConfig {
+    SnapConfig {
+        pixel_grid: None,
+        ..snap_config(cfg, dpi)
+    }
+}
+
+/// What snapping and pixel orientation align to. Other windows are enumerated only when
+/// their edges are a snap source.
+fn environment(cfg: &GestureRuntime, target: WindowHandle, own_pid: u32) -> SnapEnvironment {
+    SnapEnvironment {
+        monitors: monitor::all(),
+        windows: if cfg.snap.window_edges {
+            enumerator::snap_targets(target, own_pid)
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+/// Pixel orientation applies to move gestures only.
+fn orientation_active(a: &Active) -> bool {
+    a.kind == GestureKind::Move && a.cfg.alignment.pixel_orientation
 }
 
 fn scale(value: i32, from: i32, to: i32) -> i32 {
@@ -225,7 +267,8 @@ impl GestureThread {
             original_placement = Some(restore_for_move(target, cursor)?);
         }
         let (_, frame, margins) = window::geometry(target)?;
-        let dpi = monitor::dpi_for_rect(frame);
+        let start_monitor = monitor::from_rect(frame);
+        let dpi = start_monitor.map_or(96, |m| m.dpi);
         let edges = ResizeEdges::from_cursor(frame, cursor);
         tracing::debug!(hwnd = %target, ?kind, ?frame, ?edges, "gesture started");
         Some(Active {
@@ -240,6 +283,7 @@ impl GestureThread {
             cfg,
             start_cursor: cursor,
             start_frame: frame,
+            start_monitor: start_monitor.map(|m| m.bounds),
             original_window,
             original_placement,
             margins,
@@ -268,16 +312,19 @@ impl GestureThread {
         a.last_cursor = cursor;
         let dpi = monitor::from_point(cursor).map_or(96, |m| m.dpi);
         let snapping = a.snap && a.cfg.snap.enabled;
+        let orientation = orientation_active(&a);
         if snapping && a.env.is_none() {
-            a.env = Some(SnapEnvironment {
-                monitors: monitor::all(),
-                windows: enumerator::snap_targets(a.target, self.ctx.own_pid),
-            });
+            a.env = Some(environment(&a.cfg, a.target, self.ctx.own_pid));
         }
         let result = match a.kind {
-            GestureKind::Move => self.apply_move(&mut a, cursor, snapping, dpi),
+            GestureKind::Move => self.apply_move(&mut a, cursor, snapping, orientation, dpi),
             GestureKind::Resize => self.apply_resize(&mut a, cursor, snapping, dpi),
         };
+        if orientation && a.env.is_none() {
+            // Only needed for alignment guides: built after the window's first step, so
+            // the gesture never waits for it.
+            a.env = Some(environment(&a.cfg, a.target, self.ctx.own_pid));
+        }
         if let Some(result) = result {
             self.show_feedback(&a, &result, snapping);
             // Coalesced: at most one frame-sync message is queued at a time.
@@ -302,6 +349,7 @@ impl GestureThread {
         a: &mut Active,
         cursor: Point,
         snapping: bool,
+        orientation: bool,
         dpi: u32,
     ) -> Option<SnapResult> {
         let desired = Rect::from_xywh(
@@ -337,9 +385,17 @@ impl GestureThread {
         }
         a.margins = margins;
         a.last_frame = actual;
+        let guides = match (&a.env, snapping, orientation) {
+            // Without snapping, pixel orientation marks exact alignments of where the
+            // window really is (the application may have adjusted the position).
+            (Some(env), false, true) => {
+                alignment_guides(actual, env, &alignment_config(&a.cfg, dpi))
+            }
+            _ => result.guides,
+        };
         Some(SnapResult {
             rect: actual,
-            guides: result.guides,
+            guides,
         })
     }
 
@@ -424,20 +480,62 @@ impl GestureThread {
         } else if let Some(outline) = &mut self.outline {
             outline.hide();
         }
-        if a.kind == GestureKind::Resize && a.cfg.show_resize_overlay {
+        let orientation = orientation_active(a);
+        let text = match a.kind {
+            GestureKind::Resize if a.cfg.show_resize_overlay => Some(size_label(
+                physical_to_logical(frame.width(), dpi),
+                physical_to_logical(frame.height(), dpi),
+            )),
+            GestureKind::Move if orientation => {
+                let bounds = mon.map(|m| m.bounds);
+                let at = frame
+                    .origin()
+                    .delta_from(bounds.map_or(Point::default(), |b| b.origin()));
+                let moved = (bounds.is_some() && bounds == a.start_monitor).then(|| {
+                    let d = frame.origin().delta_from(a.start_frame.origin());
+                    (physical_to_logical(d.x, dpi), physical_to_logical(d.y, dpi))
+                });
+                Some(position_label(
+                    physical_to_logical(at.x, dpi),
+                    physical_to_logical(at.y, dpi),
+                    moved,
+                ))
+            }
+            _ => None,
+        };
+        if let Some(text) = text {
             if self.label.is_none() {
                 self.label = LabelOverlay::create();
             }
             if let Some(label) = &mut self.label {
-                let text = size_label(
-                    physical_to_logical(frame.width(), dpi),
-                    physical_to_logical(frame.height(), dpi),
-                );
                 let bounds = mon.map_or(Rect::default(), |m| m.work_area);
                 label.show(&text, frame.center(), bounds, dpi);
             }
+        } else if let Some(label) = &mut self.label {
+            label.hide();
         }
-        if snapping && a.cfg.snap.show_guides && !result.guides.is_empty() {
+        if a.cfg.alignment.show_grid && !self.grid_requested {
+            // Once per gesture, after the window has made its first step. The grid thread
+            // builds it; this thread goes straight back to moving the window.
+            self.grid_requested = true;
+            if self.grid.is_none() {
+                self.grid = GridThread::spawn();
+            }
+            if let Some(grid) = &self.grid {
+                grid.show(GridRequest {
+                    monitors: monitor::all(),
+                    size: a.cfg.alignment.grid_size,
+                    color,
+                    below: a.target,
+                });
+            }
+        }
+        let guides_wanted = if snapping {
+            a.cfg.snap.show_guides
+        } else {
+            orientation
+        };
+        if guides_wanted && !result.guides.is_empty() {
             self.guides
                 .show(&result.guides, logical_to_physical(2, dpi), color);
         } else {
@@ -453,6 +551,11 @@ impl GestureThread {
             l.hide();
         }
         self.guides.hide();
+        if std::mem::take(&mut self.grid_requested)
+            && let Some(grid) = &self.grid
+        {
+            grid.hide();
+        }
     }
 
     fn finish(&mut self) {
@@ -552,6 +655,8 @@ pub fn run(ctx: Arc<SharedState>, ready: std::sync::mpsc::Sender<Result<u32, Str
         outline: None,
         label: None,
         guides: GuideOverlays::default(),
+        grid: None,
+        grid_requested: false,
         blocked_notices: HashMap::new(),
     };
     let _ = ready.send(Ok(tid));

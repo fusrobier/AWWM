@@ -40,6 +40,11 @@ fn on_engine_event(app: &AppHandle, ev: EngineEvent) {
             }
         }
         EngineEvent::ShowRequested => ui_window::show_from_any_thread(app, None),
+        // Normal exit path (RunEvent::Exit -> shutdown), so `restore_on_exit` is honoured.
+        EngineEvent::ExitRequested => {
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || app2.exit(0));
+        }
     }
 }
 
@@ -147,8 +152,20 @@ fn confirm_elevated_start() -> bool {
     choice != IDCANCEL
 }
 
+/// Command-line flag: ask a running AWWM to exit normally, wait for it, and exit (used by
+/// the MSI before it replaces or removes files). Never starts AWWM or shows any UI.
+const EXIT_FLAG: &str = "--exit";
+/// How long `--exit` waits; engine shutdown restores windows and may wait for hung apps.
+const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Application entry point.
 pub fn run() {
+    if std::env::args_os().skip(1).any(|a| a == EXIT_FLAG) {
+        // Before anything else: no logging setup, elevation warning or single-instance
+        // logic, so an installer (possibly elevated) can call it silently.
+        let gone = awwm_engine::request_running_instance_exit(EXIT_WAIT);
+        std::process::exit(i32::from(!gone));
+    }
     let paths = match AppPaths::resolve() {
         Ok(p) => p,
         Err(e) => {
@@ -198,8 +215,8 @@ pub fn run() {
             commands::export_settings,
             commands::import_settings,
         ])
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { .. } => {
                 let app = window.app_handle();
                 let keep_running = state::try_state(app)
                     .is_none_or(|s| lock(&s.settings).general.run_in_background);
@@ -207,6 +224,24 @@ pub fn run() {
                     app.exit(0);
                 }
             }
+            // Minimizing reports a zero-sized resize while the window is iconic.
+            WindowEvent::Resized(_)
+                if window.label() == ui_window::MAIN && window.is_minimized().unwrap_or(false) =>
+            {
+                let to_tray = state::try_state(window.app_handle())
+                    .is_some_and(|s| lock(&s.settings).general.minimize_to_tray);
+                if to_tray {
+                    // Hidden, not destroyed: the tray, a second launch and the engine's
+                    // show request restore it with its current page and unsaved input.
+                    // `minimize()` first syncs tao's minimized flag (Win+D, Win+M and the
+                    // taskbar minimize without SC_MINIMIZE); hiding with a stale flag would
+                    // rewrite the style of an iconic window and leave it unrestorable.
+                    let _ = window.minimize();
+                    let _ = window.hide();
+                    tracing::debug!("settings window minimized to the tray");
+                }
+            }
+            _ => {}
         })
         .setup(move |app| setup(app, paths, logging))
         .build(tauri::generate_context!());

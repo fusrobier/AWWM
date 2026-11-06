@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { resolveTheme, type ResolvedTheme } from '../lib/theme';
 import type { Theme } from '../lib/types';
 
@@ -23,4 +23,22 @@ export function useDocumentTheme(theme: Theme): void {
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [theme]);
+}
+
+function subscribeToAppliedTheme(onChange: () => void): () => void {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  return () => observer.disconnect();
+}
+
+const getAppliedTheme = (): ResolvedTheme =>
+  document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+
+/**
+ * The theme currently applied to <html>. Changes only after the new theme tokens are in
+ * effect, so components that read CSS custom properties (e.g. to paint a canvas) can
+ * repaint when it changes.
+ */
+export function useAppliedTheme(): ResolvedTheme {
+  return useSyncExternalStore(subscribeToAppliedTheme, getAppliedTheme, () => 'light');
 }

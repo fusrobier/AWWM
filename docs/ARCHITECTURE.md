@@ -14,7 +14,9 @@ AWWM/
 │  ├─ awwm-core/                 Platform-independent logic (no Win32, no unsafe)
 │  │   geometry.rs               Point / Size / Rect / MonitorInfo / DPI helpers
 │  │   resize.rs                 Resize-edge detection, constrained resize math
-│  │   snap.rs                   snap_engine: move/resize snapping + guide generation
+│  │   snap.rs                   snap_engine: move/resize snapping + guide generation,
+│  │                             exact-alignment guides (pixel orientation)
+│  │   pixel_grid.rs             Pixel-grid line positions (drawing, snapping, read-out)
 │  │   gesture.rs                Modifier/button model, gesture classification
 │  │   rules.rs                  automation_rules: rule model + window matching
 │  │   settings.rs               Settings model, defaults, validation, migration
@@ -36,7 +38,9 @@ AWWM/
 │      session.rs                Crash-recovery record (session.json)
 │      input_hook.rs             global_mouse_hook + keyboard_state (LL hooks thread)
 │      gesture.rs                window_movement + window_resizing (gesture thread)
-│      overlay.rs                overlay_manager: frames, size label, snap guides
+│      grid_thread.rs            Own thread that builds/destroys the pixel-grid windows
+│      overlay.rs                overlay_manager: frames, size/position label, snap
+│                                guides, pixel grid
 │      hotkeys.rs                Global keyboard shortcuts (RegisterHotKey)
 │      bin/awwm-testapp.rs       Controllable test windows for integration tests
 │      tests/                    Integration tests against real windows
@@ -98,6 +102,38 @@ Tauri, so it is exercised directly by integration tests with real windows create
 * **Tauri main thread.** Tray icon, IPC commands (all `async`, so they never run on the
   UI thread), and the settings WebView. The WebView is created on demand and destroyed
   when closed, so the idle footprint of the background process is the Rust engine only.
+  Minimizing the window is different: with `general.minimizeToTray` on (default), the
+  `WindowEvent::Resized` handler sees `is_minimized()` and calls `window.minimize()` and then
+  `window.hide()`. The `minimize()` call syncs tao's minimized flag, because Win+D, Win+M and
+  a taskbar minimize do not send `SC_MINIMIZE`. The WebView is hidden, not destroyed, so a
+  later show (tray click, second launch, the engine's show message) restores the same page
+  and unsaved input without reloading the UI. Showing calls `show()` and then `unminimize()`,
+  which avoids a flash. Closing
+  is governed by `general.runInBackground` as before.
+
+The engine thread owns a message-only window (class `AWWM.Engine`). Besides hotkeys and
+timers it handles two registered window messages from other processes:
+`AWWM.ShowSettings` (a second launch asks the running copy to show its window) and
+`AWWM.ExitRequested`. The latter is turned into `EngineEvent::ExitRequested`,
+which the Tauri side answers with `app.exit(0)`: the normal exit path, so *Restore windows
+when exiting* applies. The NSIS installer and uninstaller post it to close a running AWWM
+before replacing or removing files (it must not run the old executable during an update).
+The MSI closes AWWM the same way through `awwm.exe --exit` (`EXIT_FLAG` in `src-tauri`,
+`request_running_instance_exit` in the engine; custom action in
+`src-tauri/wix/awwm-graceful-exit.wxs`). That mode posts the message, waits up to 20 s for
+the process to end and exits with code 0 if no instance is left or 1 if it is still running.
+It never starts AWWM or shows UI. The custom action runs only when the installation folder
+lies inside Program Files: it executes with the installer's token (administrator or
+LocalSystem for elevated and managed installs), and the folder can be restored from a
+user-writable HKCU value, so a binary elsewhere could have been planted by a standard user.
+Otherwise Restart Manager closes AWWM and the next start recovers its windows.
+
+* **Grid thread.** Creating and painting one monitor-sized window per monitor measured
+  60-160 ms for three monitors, which would freeze the dragged window if done on the gesture
+  thread. The gesture thread only records the wanted grid (latest request wins) and wakes
+  `grid_thread.rs`, which owns the `GridOverlay` windows (they are thread-affine) and their
+  message loop. A newer request, including the hide at the end of a drag, cancels a grid that
+  is still being built between two monitors.
 
 ## 3. Coordinates and DPI
 
@@ -116,6 +152,18 @@ pixels using the effective DPI of the monitor the window is on
 (`GetDpiForMonitor(MDT_EFFECTIVE_DPI)`), e.g. a 1500 px wide window on a 150 % monitor is
 displayed as 1000 px. Snap distance and border thickness are configured in logical
 pixels and converted per monitor.
+
+The pixel grid (`awwm-core::pixel_grid`) is anchored at the top-left corner of each monitor.
+With the monitor's effective DPI, line `k` lies at the physical coordinate
+`origin + round(k * size * dpi / 96)`, rounding halves up. Each line is rounded from its own
+index instead of accumulating a rounded step, so the grid does not drift at fractional scale
+factors such as 125 % and every line falls on a whole physical pixel. Drawing, snapping and
+the position read-out use the same function, so a window snaps exactly to the drawn lines.
+The position label shows the visible frame's top-left corner relative to the origin of the
+monitor holding most of the window, converted to logical pixels, plus the offset from the
+start of the drag. The offset (`moved` in `position_label`) is shown only while the window is
+on the monitor where the drag started, because monitors with different scaling share no
+common logical unit; elsewhere the label shows only `X ... · Y ...`.
 
 When a moved window crosses into a monitor with a different DPI, a per-monitor-aware
 application resizes itself (`WM_DPICHANGED`). The move gesture detects the size change
@@ -222,7 +270,21 @@ receive stray Ctrl shortcuts.
   re-anchored so the fixed edge does not drift. The accepted size is deliberately not
   stored as a limit, because applications that round their size would otherwise lock it.
 * **Feedback** – an accent outline around the visible frame and a label with the current
-  logical width × height, updated on each step and removed immediately on release.
+  logical width × height, updated on each step and removed immediately on release. During a
+  move with *Pixel orientation* on, the label shows the position and offset instead (see
+  section 7). The snap environment that the alignment guides need is built after the window's
+  first step, and other windows are enumerated only when window-edge snapping is on
+  (`environment()` in `gesture.rs`). The label window caches its text and its rounded-corner region: the text is
+  repainted only when it changes and the region is rebuilt only when the label size changes,
+  because the label updates on every mouse move.
+* **Pixel grid overlay** – with *Visible pixel grid* on, the first gesture step asks the grid
+  thread to create one `GridOverlay` window per monitor (`WS_EX_LAYERED|WS_EX_TRANSPARENT`, colour-keyed so only
+  the lines are visible, with the key colour chosen to differ from the line colour). Each
+  window is painted at alpha 0 and then set once to 96/255 (`GRID_ALPHA`), so a half-painted
+  monitor-sized window never flashes. There is no fade-in. It is inserted directly below the dragged window in
+  the Z-order, so it never covers it, and it is click-through. Every fifth line is solid; the
+  others are dotted. The windows are destroyed when the gesture ends or is cancelled, so an
+  idle AWWM holds no monitor-sized surfaces.
 * **Robustness** – a gesture ends on button-up, Esc (cancel), target destruction, desktop
   switch (UAC prompt, lock screen) or a second press of the same button (missed up-event).
 
@@ -244,7 +306,34 @@ Pure functions in `awwm-core::snap`:
 Snapping is active only while the snap modifier is held; pressing or releasing it during a
 gesture re-evaluates immediately.
 
+**Pixel grid as a fallback snap source.** `SnapConfig.pixel_grid` (`PixelGridSpec { size }`)
+collects pixel-grid lines separately (`Candidates.px`/`py`). The engine sets it only when the
+grid is visible and *Snap to the pixel grid* is on. The lines are not ranked against the other
+sources: `snap_move` uses them on an axis, and `snap_resize` for a dragged edge, only when no
+other enabled target is usable within the snap distance. For each frame feature,
+`pixel_grid::bracketing_lines` returns only the two lines around it (the last line at or
+before the feature, and the next one), one of which is always the nearest, so the per-move
+work does not depend on the grid size. The other sources keep their tie-break priority:
+work-area edge, monitor edge, window edge, snapping grid, centre line. The monitor holding
+most of the window supplies the origin and DPI.
+
+**Exact alignment (pixel orientation).** `alignment_guides(frame, env, cfg)` collects the same
+candidate lines except the pixel grid (a guide every few pixels would only flicker): screen
+edges, work-area edges, other windows within the snap distance, centre lines and the snapping
+grid, as enabled. It returns a `SnapGuide` for every frame edge or centre that matches a line
+exactly (distance 0). It returns guides only and never a new position, so the window is
+not moved. Each position is marked once, with the highest-priority source. The gesture
+thread uses it for move gestures while the snap key is not held; while snapping, the normal
+`snap_move` guides are shown.
+
 ## 8. Settings and persistence
+
+The settings model groups values into sections: `general` (including `minimizeToTray`,
+default on), `snapping`, `gestures` and `alignment` (`pixelOrientation`, `showGrid`,
+`gridSize`, `snapToGrid`), among others. `gridSize` is clamped to 4–200
+(`PIXEL_GRID_SIZE_RANGE`). Files written before an option existed get its default when
+loaded, and a stored value is never replaced by the default, so an update does not change
+an existing choice.
 
 Settings live in `%APPDATA%\dev.awwm.windowmanager\settings.json` (schema-versioned, unknown fields
 ignored, missing fields defaulted, values clamped by `Settings::sanitize`). Writes are
@@ -263,3 +352,7 @@ rotation, 7 files retained).
   capability file grants no file-system, shell or HTTP permissions. Opening documentation
   and folders is done by fixed, Rust-side paths only.
 * A strict CSP is configured for the WebView.
+* `AWWM.ExitRequested` can be posted by any process that can find the message-only window.
+  This adds no capability: a process of the same session and integrity level can already
+  terminate AWWM, and User Interface Privilege Isolation blocks senders of lower integrity.
+  The message only triggers the normal, orderly exit.

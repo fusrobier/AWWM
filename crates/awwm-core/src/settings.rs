@@ -22,6 +22,8 @@ pub const SNAP_DISTANCE_RANGE: (u32, u32) = (2, 100);
 pub const BORDER_THICKNESS_RANGE: (u32, u32) = (1, 16);
 /// Valid range of grid rows/columns.
 pub const GRID_DIVISIONS_RANGE: (u32, u32) = (2, 24);
+/// Valid range of the visible pixel grid spacing (logical pixels).
+pub const PIXEL_GRID_SIZE_RANGE: (u32, u32) = (4, 200);
 /// Maximum handle-change reattach grace period in seconds.
 pub const MAX_REATTACH_GRACE_SECS: u32 = 600;
 /// Maximum number of rules (protects the engine from pathological configurations).
@@ -88,6 +90,9 @@ pub struct GeneralSettings {
     pub start_minimized: bool,
     /// Keep running in the tray when the settings window is closed.
     pub run_in_background: bool,
+    /// Hide the settings window in the tray (instead of the taskbar) when it is minimized.
+    /// Files written before this option existed get the default (`true`).
+    pub minimize_to_tray: bool,
     /// Release all managed windows (restore topmost/opacity) when AWWM exits.
     pub restore_on_exit: bool,
     /// Re-adopt windows that were managed when AWWM last stopped (crash recovery).
@@ -108,6 +113,7 @@ impl Default for GeneralSettings {
             start_with_windows: false,
             start_minimized: false,
             run_in_background: true,
+            minimize_to_tray: true,
             restore_on_exit: true,
             recover_session: true,
             reattach_grace_secs: 30,
@@ -225,6 +231,32 @@ impl Default for SnapSettings {
     }
 }
 
+/// Pixel orientation and the visible pixel grid during gestures.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AlignmentSettings {
+    /// While moving: show the window position in pixels and mark edges that line up
+    /// exactly with snap candidates. Never changes where the window goes.
+    pub pixel_orientation: bool,
+    /// Draw a pixel grid on every monitor while moving or resizing.
+    pub show_grid: bool,
+    /// Grid spacing in logical pixels.
+    pub grid_size: u32,
+    /// While snapping is active and the grid is shown, edges also snap to grid lines.
+    pub snap_to_grid: bool,
+}
+
+impl Default for AlignmentSettings {
+    fn default() -> Self {
+        Self {
+            pixel_orientation: true,
+            show_grid: false,
+            grid_size: 20,
+            snap_to_grid: true,
+        }
+    }
+}
+
 /// A global keyboard shortcut.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -319,6 +351,7 @@ pub struct Settings {
     pub pinning: PinningSettings,
     pub gestures: GestureSettings,
     pub snapping: SnapSettings,
+    pub alignment: AlignmentSettings,
     pub hotkeys: HotkeySettings,
     pub rules: Vec<Rule>,
 }
@@ -331,6 +364,7 @@ impl Default for Settings {
             pinning: PinningSettings::default(),
             gestures: GestureSettings::default(),
             snapping: SnapSettings::default(),
+            alignment: AlignmentSettings::default(),
             hotkeys: HotkeySettings::default(),
             rules: default_rules(),
         }
@@ -413,6 +447,11 @@ impl Settings {
                 .find(|&m| m != self.gestures.modifier && m != Modifier::Win)
                 .unwrap_or(Modifier::Ctrl);
         }
+
+        let a = &mut self.alignment;
+        a.grid_size = a
+            .grid_size
+            .clamp(PIXEL_GRID_SIZE_RANGE.0, PIXEL_GRID_SIZE_RANGE.1);
 
         let h = &mut self.hotkeys;
         for hk in [&mut h.toggle_pin, &mut h.opacity_up, &mut h.opacity_down] {
@@ -699,6 +738,44 @@ mod tests {
         assert!(s.general.management_enabled);
         assert_eq!(s.snapping.distance, 20);
         assert!(s.snapping.window_edges);
+    }
+
+    #[test]
+    fn files_from_before_the_new_options_get_their_defaults_and_keep_stored_values() {
+        // Shape of a settings file written by an earlier build: no `minimizeToTray`, no
+        // `alignment` section.
+        let s: Settings = serde_json::from_str(
+            r#"{"schemaVersion":1,"general":{"runInBackground":false,"startMinimized":true},
+                "snapping":{"gridEnabled":true}}"#,
+        )
+        .expect("deserialize");
+        assert!(s.general.minimize_to_tray, "new option defaults to on");
+        assert!(!s.general.run_in_background, "stored value kept");
+        assert!(s.general.start_minimized, "stored value kept");
+        assert_eq!(s.alignment, AlignmentSettings::default());
+        assert!(s.alignment.pixel_orientation);
+        assert!(!s.alignment.show_grid);
+        assert_eq!(s.alignment.grid_size, 20);
+        assert!(s.snapping.grid_enabled);
+    }
+
+    #[test]
+    fn a_stored_minimize_to_tray_choice_is_never_replaced_by_the_default() {
+        let s: Settings =
+            serde_json::from_str(r#"{"general":{"minimizeToTray":false}}"#).expect("deserialize");
+        assert!(!s.general.minimize_to_tray);
+        let json = serde_json::to_string(&s.sanitized()).expect("serialize");
+        assert!(json.contains("\"minimizeToTray\":false"));
+        assert!(json.contains("\"alignment\":{\"pixelOrientation\":true,\"showGrid\":false,\"gridSize\":20,\"snapToGrid\":true}"));
+    }
+
+    #[test]
+    fn pixel_grid_size_is_clamped() {
+        for (raw, expected) in [(0, 4), (3, 4), (4, 4), (37, 37), (200, 200), (5000, 200)] {
+            let mut s = Settings::default();
+            s.alignment.grid_size = raw;
+            assert_eq!(s.sanitized().alignment.grid_size, expected, "{raw}");
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
-//! Structured logging with `tracing`: daily-rotated files in `%LOCALAPPDATA%\AWWM\logs`
+//! Structured logging with `tracing`: daily-rotated files in
+//! `%LOCALAPPDATA%\dev.awwm.windowmanager\logs`
 //! (7 files kept) and, in debug builds, stderr. The level can be changed at runtime.
 
 use std::path::Path;

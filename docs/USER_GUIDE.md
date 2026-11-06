@@ -29,6 +29,10 @@ restrictions that come from Windows itself (administrator windows, games, Store 
   **Keep running in the background when this window is closed** is on (the default). Pins,
   rules, mouse gestures and shortcuts keep working. With the option off, closing the window
   exits AWWM.
+- When you minimize the settings window, AWWM hides it instead of leaving a button on the
+  taskbar, as long as **Minimize to the tray** is on (the default). AWWM keeps running. Click
+  the tray icon, select **Open settings**, or start AWWM again to show the window with the
+  same page and any input you had not saved yet.
 - Only one copy of AWWM runs at a time. Starting it again brings the settings window of
   the running copy to the front.
 - Changes in the settings window are saved automatically; settings pages show
@@ -298,6 +302,56 @@ Choose what windows snap to:
 | **Other windows** | On | Edges of visible windows next to the one you drag |
 | **Centre lines** | On | The horizontal and vertical centre of each work area (moving only; the window's centre snaps to them) |
 | **Grid** | Off | An invisible grid that divides each work area into **Grid columns** × **Grid rows** cells (2–24 each, default 4 × 4) |
+| **Snap to the pixel grid** | On | The lines of the [visible pixel grid](#pixel-grid-and-orientation), while that grid is shown. Used only when none of the other targets is within reach. |
+
+When two targets are equally close, AWWM prefers work area edges, then screen edges, other
+windows, the **Grid** and last the centre lines.
+
+### Pixel grid and orientation
+
+The **Pixel grid and orientation** card on the **Mouse controls** page, below **Snapping**,
+helps you place windows to the pixel. It has no effect while **Mouse gestures** are off.
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Pixel orientation** | On | While you move a window, shows its position and marks exact alignments (see below). Moving only. |
+| **Visible pixel grid** | Off | Shows a grid of lines on every monitor while you move or resize a window. |
+| **Grid size** | 20 px | Distance between two grid lines, 4–200 px in logical pixels. A **Preview** shows the grid at actual size. |
+| **Snap to the pixel grid** | On | While the grid is visible and the snap key is held, window edges also snap to the grid lines. |
+
+**Pixel orientation.** A label at the centre of the window shows, for example,
+`X 640 · Y 320 · Δ +120, −45`:
+
+- `X` and `Y` are the position of the window's top-left corner (the visible frame) in
+  logical pixels, measured from the top-left corner of the monitor that holds most of the
+  window.
+- `Δ` is how far the window has moved since the drag started. It is shown only while the
+  window is on the monitor where the drag started, because monitors with different scaling
+  have no common logical unit. On other monitors the label shows only `X` and `Y`.
+
+While the snap key is not held, thin guide lines in the **Outline and guide colour** appear
+where an edge or centre of the window lines up exactly (0 px apart) with a screen edge, a
+work area edge, another window (within the snap distance), a centre line or a line of the
+**Grid**, as far as those targets are turned on. The lines of the pixel grid are not
+marked. These guide lines never move the window. While you hold the snap key, normal
+snapping and its guides apply instead.
+
+**Visible pixel grid.** While you move or resize a window, AWWM draws lines on every
+monitor, starting at the top-left corner of each monitor:
+
+- The lines are **Grid size** logical pixels apart. On a monitor with display scaling they
+  are spaced wider by the scale factor (at 150 %, 20 px lines are 30 physical pixels apart)
+  and always fall on whole physical pixels.
+- Every fifth line is solid, the others are dotted.
+- The grid uses the **Outline and guide colour** at about 38 % opacity.
+- It is drawn directly below the window you drag, never over it. Clicks pass through it.
+- It disappears the moment you release the button or cancel with **Esc**.
+
+**Snap to the pixel grid.** Hold the snap key while the grid is visible and window edges
+also snap to its lines when no screen edge, other window or other snap target is within the
+**Snap distance**. When moving, this is decided separately for the horizontal and vertical
+direction; when resizing, for each edge you drag. The lines of the monitor that holds most
+of the window are used. The **Cheat sheet** lists the grid and this snapping when they are on.
 
 ### Which windows gestures work on
 
@@ -354,6 +408,7 @@ activation key, AWWM picks a different snap key automatically.
 
 | Setting | Default | What it does |
 |---|---|---|
+| **Minimize to the tray** | On | Minimizing the settings window hides it in the notification area, so it has no taskbar button. AWWM keeps running; click the tray icon, select **Open settings** or start AWWM again to show the window. When off, minimizing works as usual. Closing the window is controlled by the next setting. |
 | **Keep running in the background when this window is closed** | On | Closing the settings window leaves AWWM running in the tray. When off, closing the window exits AWWM. |
 | **Restore windows when exiting** | On | Releases all managed windows (always on top and opacity) when AWWM exits. When off, the windows stay as they are, and the next start adopts or restores them. |
 | **Recover managed windows after a restart or crash** | On | At start, windows that AWWM managed when it last stopped and that are still open are adopted again (badge **Recovered** for manually managed ones). When off, those windows are restored to their original state instead. |
@@ -401,7 +456,7 @@ paths of the settings folder, settings file and log folder.
 
 ## Tray menu
 
-Click the tray icon to open the settings window. Right-click it for this menu:
+Click the tray icon to open the settings window, including after you minimized it to the tray. Right-click it for this menu:
 
 | Item | What it does |
 |---|---|
@@ -512,10 +567,14 @@ automatically when the file is loaded, and unknown entries are ignored.
 
 1. If **Start with Windows** is on, turn it off first (the NSIS uninstaller also removes the
    startup entry; the MSI uninstaller does not).
-2. Exit AWWM from the tray menu (**Exit AWWM**) *before* uninstalling. With **Restore
-   windows when exiting** on, this returns all managed windows to normal. If the uninstaller
-   has to close a running AWWM and you also delete the application data, windows AWWM had
-   pinned or made transparent stay that way until they are closed.
+2. You do not need to exit AWWM first. The uninstaller and the installer (when you update)
+   close a running AWWM automatically by asking it to exit the normal way, so with **Restore
+   windows when exiting** on, all managed windows return to normal first. This applies to
+   the NSIS installation and to MSI installations in Program Files (the MSI default). You can
+   also select **Exit AWWM** in the tray
+   menu, or run `awwm.exe --exit` (for example in a script): it asks a running AWWM to exit,
+   waits up to 20 seconds for it to end and returns exit code 0 when no AWWM is left or 1
+   when it is still running. It never starts AWWM or shows a window.
 3. Open Windows **Settings** → **Apps** → **Installed apps** (Windows 10: **Apps & features**),
    find **AWWM** and select **Uninstall**.
 4. Your settings (`%APPDATA%\dev.awwm.windowmanager`) and the logs and recovery record

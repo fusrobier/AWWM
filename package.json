@@ -4,6 +4,14 @@
   "version": "1.0.0",
   "description": "AWWM - Advanced Window Manager for Windows (settings interface)",
   "license": "MIT",
+  "homepage": "https://github.com/fusrobier/AWWM",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fusrobier/AWWM.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fusrobier/AWWM/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

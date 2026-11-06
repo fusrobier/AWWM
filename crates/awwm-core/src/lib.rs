@@ -7,6 +7,7 @@
 
 pub mod geometry;
 pub mod gesture;
+pub mod pixel_grid;
 pub mod resize;
 pub mod rules;
 pub mod settings;
